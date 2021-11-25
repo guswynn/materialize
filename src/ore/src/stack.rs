@@ -92,7 +92,6 @@ pub const STACK_SIZE: usize = {
 /// stack growth. Not all recursive code paths support returning errors,
 /// however, in which case unconditionally growing the stack with this function
 /// is still preferable to panicking.
-#[inline(always)]
 pub fn maybe_grow<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -181,7 +180,6 @@ pub trait CheckedRecursion {
     ///
     /// Calls to this function must be manually inserted at any point that
     /// mutual recursion occurs.
-    #[inline(always)]
     fn checked_recur<F, T, E>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce(&Self) -> Result<T, E>,
@@ -195,7 +193,6 @@ pub trait CheckedRecursion {
 
     /// Like [`CheckedRecursion::checked_recur`], but operates on a mutable
     /// reference to `Self`.
-    #[inline(always)]
     fn checked_recur_mut<F, T, E>(&mut self, f: F) -> Result<T, E>
     where
         F: FnOnce(&mut Self) -> Result<T, E>,
@@ -233,7 +230,7 @@ impl RecursionGuard {
             *depth += 1;
             Ok(())
         } else {
-            Err(RecursionLimitError { limit: self.limit })
+            Err(RecursionLimitError)
         }
     }
 
@@ -244,13 +241,11 @@ impl RecursionGuard {
 
 /// A [`RecursionGuard`]'s recursion limit was reached.
 #[derive(Clone, Debug)]
-pub struct RecursionLimitError {
-    limit: usize,
-}
+pub struct RecursionLimitError;
 
 impl fmt::Display for RecursionLimitError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "exceeded recursion limit of {}", self.limit)
+        f.write_str("recursion limit exceeded")
     }
 }
 

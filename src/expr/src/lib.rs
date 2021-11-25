@@ -39,7 +39,7 @@ pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     compare_columns, AggregateExpr, ColumnOrder, JoinImplementation, MirRelationExpr,
-    RowSetFinishing, RECURSION_LIMIT,
+    RowSetFinishing,
 };
 pub use scalar::func::{self, BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
