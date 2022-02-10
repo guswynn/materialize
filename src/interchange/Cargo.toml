@@ -1,50 +1,50 @@
 [package]
-name = "interchange"
+name = "mz-interchange"
 description = "Translations for various data serialization formats."
 version = "0.0.0"
 edition = "2021"
 publish = false
+rust-version = "1.58.0"
 
 [[bench]]
-name = "interchange-bench"
+name = "mz-interchange-bench"
 path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.51"
-avro-derive = { path = "../avro-derive" }
+anyhow = "1.0.52"
+mz-avro-derive = { path = "../avro-derive" }
 base64 = "0.13.0"
 byteorder = "1.4.3"
-ccsr = { path = "../ccsr" }
+mz-ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-dec = "0.4.5"
+dec = "0.4.8"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.18"
+futures = "0.3.21"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-log = "0.4.13"
+tracing = "0.1.30"
 mz-avro = { path = "../avro", features = ["snappy"] }
 num-traits = "0.2.14"
-ordered-float = { version = "2.8.0", features = ["serde"] }
-ore = { path = "../ore" }
-protobuf = { git = "https://github.com/MaterializeInc/rust-protobuf.git" }
-mz-protoc = { path = "../protoc" }
+ordered-float = { version = "2.10.0", features = ["serde"] }
+mz-ore = { path = "../ore" }
+prost = "0.9.0"
+prost-reflect = "0.5.2"
 regex = "1.5.4"
-repr = { path = "../repr" }
-serde = { version = "1.0.131", features = ["derive"] }
-serde_json = "1.0.73"
-sha2 = "0.9.8"
-smallvec = "1.7.0"
-sql-parser = { path = "../sql-parser" }
+mz-repr = { path = "../repr" }
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.78"
+sha2 = "0.10.1"
+smallvec = "1.8.0"
 tempfile = "3.2.0"
-tokio = { version = "1.13.0", features = ["fs"] }
+tokio = { version = "1.16.1", features = ["fs"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde"] }
 
 [dev-dependencies]
-criterion = "0.3.5"
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 
 [build-dependencies]
-mz-protoc = { path = "../protoc" }
+prost-build = "0.9.1"
