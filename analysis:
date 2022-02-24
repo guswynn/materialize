@@ -1,0 +1,29 @@
+wasm-bindgen:
+  reqwest: just for wasm target
+  connection-string: just for wasm target
+  js-sys/web-sys:
+    reqwest: wasm target
+    ring: wasm target
+    plotters: wasm target
+
+prost-build: build script, doesnt matter
+
+
+want: used by hyper, needs to change
+reqwest: needs to change
+tokio-util: needs to change
+tokio-postgres: needs to change
+pprof: ???
+pubnub: ???
+postgres: ???
+fail: ???
+os_info: needs to change
+opentls: ???
+native-tls: ???
+mio: needs to change
+globset: ??????
+
+env_logger: switch it out
+
+
+
