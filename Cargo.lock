@@ -5270,7 +5270,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.28.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#882158555b61f8257a69add38e2cd883d7358ce1"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#89bf41a351e75ae76728f103465537783d9d4a1d"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -5287,7 +5287,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.2.0+1.8.2"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#882158555b61f8257a69add38e2cd883d7358ce1"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#89bf41a351e75ae76728f103465537783d9d4a1d"
 dependencies = [
  "cmake",
  "libc",
@@ -6978,9 +6978,9 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.6.2+zstd.1.5.1"
+version = "2.0.1+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2daf2f248d9ea44454bfcb2516534e8b8ad2fc91bf818a1885495fc42bc8ac9f"
+checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
 dependencies = [
  "cc",
  "libc",
