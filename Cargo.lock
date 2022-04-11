@@ -982,8 +982,8 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc347c19eb5b940f396ac155822caee6662f850d97306890ac3773ed76c90c5a"
 dependencies = [
- "prost",
- "prost-types",
+ "prost 0.9.0",
+ "prost-types 0.9.0",
  "tonic",
  "tonic-build",
  "tracing-core",
@@ -1001,7 +1001,7 @@ dependencies = [
  "futures",
  "hdrhistogram",
  "humantime",
- "prost-types",
+ "prost-types 0.9.0",
  "serde",
  "serde_json",
  "thread_local",
@@ -3154,9 +3154,9 @@ dependencies = [
  "mz-ore",
  "mz-test-util",
  "postgres-types",
- "prost",
+ "prost 0.9.0",
  "prost-build",
- "prost-types",
+ "prost-types 0.9.0",
  "rand",
  "rand_distr",
  "tokio",
@@ -3237,7 +3237,7 @@ dependencies = [
  "mz-timely-util",
  "postgres-protocol",
  "prometheus",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "pubnub-hyper",
  "rand",
@@ -3297,7 +3297,7 @@ dependencies = [
  "mz-transform",
  "postgres-types",
  "prometheus",
- "prost",
+ "prost 0.9.0",
  "protobuf-native",
  "rand",
  "rdkafka",
@@ -3363,7 +3363,7 @@ dependencies = [
  "mz-timely-util",
  "postgres-protocol",
  "prometheus",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "pubnub-hyper",
  "rand",
@@ -3429,7 +3429,7 @@ dependencies = [
  "mz-repr",
  "mz-stash",
  "num_enum",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "rdkafka",
  "regex",
@@ -3503,7 +3503,7 @@ dependencies = [
  "proc-macro2",
  "proptest",
  "proptest-derive",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "regex",
  "regex-syntax",
@@ -3590,7 +3590,7 @@ dependencies = [
  "mz-repr",
  "num-traits",
  "ordered-float",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "prost-reflect",
  "regex",
@@ -3814,7 +3814,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-types",
  "parquet2",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "rand",
  "rusqlite",
@@ -3990,7 +3990,7 @@ dependencies = [
  "ordered-float",
  "proptest",
  "proptest-derive",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "rand",
  "regex",
@@ -4066,7 +4066,7 @@ dependencies = [
  "mz-sql-parser",
  "postgres-protocol",
  "postgres-types",
- "prost",
+ "prost 0.9.0",
  "protobuf-native",
  "rdkafka",
  "regex",
@@ -4188,7 +4188,7 @@ dependencies = [
  "mz-timely-util",
  "postgres-protocol",
  "prometheus",
- "prost",
+ "prost 0.9.0",
  "prost-build",
  "pubnub-hyper",
  "rand",
@@ -4271,7 +4271,7 @@ dependencies = [
  "mz-stash",
  "postgres_array",
  "predicates",
- "prost",
+ "prost 0.9.0",
  "prost-reflect",
  "protobuf-src",
  "rand",
@@ -4625,7 +4625,7 @@ dependencies = [
  "futures-util",
  "http",
  "opentelemetry",
- "prost",
+ "prost 0.9.0",
  "thiserror",
  "tokio",
  "tonic",
@@ -5180,7 +5180,17 @@ version = "0.9.0"
 source = "git+https://github.com/MaterializeInc/prost.git#d26efab661091ef2dc07fedd57d55f2aa334a915"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.9.0",
+]
+
+[[package]]
+name = "prost"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd5316aa8f5c82add416dfbc25116b84b748a21153f512917e8143640a71bbd"
+dependencies = [
+ "bytes",
+ "prost-derive 0.10.0",
 ]
 
 [[package]]
@@ -5195,8 +5205,8 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prost",
- "prost-types",
+ "prost 0.9.0",
+ "prost-types 0.9.0",
  "protobuf-src",
  "regex",
  "tempfile",
@@ -5216,14 +5226,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-reflect"
-version = "0.6.1"
+name = "prost-derive"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7499dea83d4246378e031fe2406ecefd0c20b2cbb6b1908672ba679ea20d0e69"
+checksum = "df35198f0777b75e9ff669737c6da5136b59dba33cf5a010a6d1cc4d56defc6f"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "prost-reflect"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cf1fa95ed5110d0f70e8e7253af513aaeace60f7c1a9c7501e515ba7dc19dd5"
 dependencies = [
  "base64",
- "prost",
- "prost-types",
+ "prost 0.10.0",
+ "prost-types 0.10.0",
  "serde",
  "serde-value",
  "time",
@@ -5235,7 +5258,17 @@ version = "0.9.0"
 source = "git+https://github.com/MaterializeInc/prost.git#d26efab661091ef2dc07fedd57d55f2aa334a915"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.9.0",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "926681c118ae6e512a3ccefd4abbe5521a14f4cc1e207356d4d00c0b7f2006fd"
+dependencies = [
+ "bytes",
+ "prost 0.10.0",
 ]
 
 [[package]]
@@ -6504,8 +6537,8 @@ dependencies = [
  "hyper-timeout",
  "percent-encoding",
  "pin-project",
- "prost",
- "prost-derive",
+ "prost 0.9.0",
+ "prost-derive 0.9.0",
  "tokio",
  "tokio-stream",
  "tokio-util 0.6.9",
