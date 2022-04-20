@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.56"
 async-compression = { version = "0.3.12", features = ["tokio", "gzip"] }
 async-trait = "0.1.53"
-axum = "0.5.1"
+axum = "0.5.3"
 aws-sdk-kinesis = { version = "0.10.1", default-features = false }
 aws-sdk-s3 = { version = "0.10.1", default-features = false }
 aws-sdk-sqs = { version = "0.10.1", default-features = false }
