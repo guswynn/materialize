@@ -626,9 +626,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.5.3"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f523b4e98ba6897ae90994bc18423d9877c54f9047b06a00ddc8122a957b1c70"
+checksum = "ab2504b827a8bef941ba3dd64bdffe9cf56ca182908a147edd6189c95fbcae7d"
 dependencies = [
  "async-trait",
  "axum-core",
@@ -651,16 +651,16 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tower",
- "tower-http",
+ "tower-http 0.3.3",
  "tower-layer",
  "tower-service",
 ]
 
 [[package]]
 name = "axum-core"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3ddbd16eabff8b45f21b98671fddcc93daaa7ac4c84f8473693437226040de5"
+checksum = "da31c0ed7b4690e2c78fe4b880d21cd7db04a346ebc658b4270251b695437f17"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2572,7 +2572,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util 0.7.1",
  "tower",
- "tower-http",
+ "tower-http 0.2.5",
  "tracing",
 ]
 
@@ -2885,7 +2885,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-postgres",
  "tokio-stream",
- "tower-http",
+ "tower-http 0.2.5",
  "tracing",
  "url",
  "uuid",
@@ -3488,24 +3488,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-mzcloud-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "jsonwebtoken",
- "mz-ore",
- "mzcloud",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "urlencoding",
- "zip",
-]
-
-[[package]]
 name = "mz-npm"
 version = "0.0.0"
 dependencies = [
@@ -3641,6 +3623,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "lazy_static",
+ "libsqlite3-sys",
  "md-5",
  "mz-build-info",
  "mz-ore",
@@ -3679,12 +3662,15 @@ dependencies = [
  "mz-persist",
  "mz-persist-types",
  "num_cpus",
+ "num_enum",
  "rand",
  "serde",
+ "serde_json",
  "tempfile",
  "timely",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -3996,7 +3982,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-postgres",
- "tower-http",
+ "tower-http 0.2.5",
  "uuid",
  "walkdir",
 ]
@@ -4207,18 +4193,6 @@ dependencies = [
  "quote",
  "syn",
  "tempfile",
-]
-
-[[package]]
-name = "mzcloud"
-version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/cloud-sdks#824ee6e294e92a73184eb7eb7d6b072e7352f097"
-dependencies = [
- "reqwest",
- "serde",
- "serde_derive",
- "serde_json",
- "url",
 ]
 
 [[package]]
@@ -5393,7 +5367,6 @@ dependencies = [
  "lazy_static",
  "log",
  "mime",
- "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
@@ -6432,10 +6405,28 @@ dependencies = [
  "http-body",
  "http-range-header",
  "pin-project-lite",
- "tower",
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d342c6d58709c0a6d48d48dabbb62d4ef955cf5f0f3bbfd845838e7ae88dbae"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-range-header",
+ "pin-project-lite",
+ "tower",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -6983,17 +6974,6 @@ name = "zeroize"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf68b08513768deaa790264a7fac27a58cbf2705cfcdc9448362229217d7e970"
-
-[[package]]
-name = "zip"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6fa4aa90e99fb8d701bda16fb040d8ed2f9c7176fb44de750e880a74b580315"
-dependencies = [
- "byteorder",
- "crc32fast",
- "flate2",
-]
 
 [[package]]
 name = "zstd-sys"
