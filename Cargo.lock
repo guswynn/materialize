@@ -6058,9 +6058,9 @@ dependencies = [
 
 [[package]]
 name = "tiberius"
-version = "0.9.3"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb0b4d064237401eec66db38a14f7205b0cf2d37104402934009cc6f53dc16f4"
+checksum = "332ebb88fba7df15f54c9f1332baf284d6c13c6afa3ff612e924db07a5c1d9ce"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
@@ -6078,7 +6078,7 @@ dependencies = [
  "pretty-hex",
  "thiserror",
  "tracing",
- "uuid 0.8.2",
+ "uuid 1.1.2",
 ]
 
 [[package]]
