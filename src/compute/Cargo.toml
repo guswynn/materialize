@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.61"
 async-trait = "0.1.56"
 axum = "0.5.13"
 clap = { version = "3.2.14", features = ["derive", "env"] }

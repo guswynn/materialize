@@ -7,7 +7,7 @@ rust-version = "1.63.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.61"
 bytes = "1.2.0"
 clap = { version = "3.2.14", features = ["derive"] }
 datadriven = "0.6.0"
