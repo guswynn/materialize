@@ -4198,6 +4198,7 @@ dependencies = [
  "openssl",
  "opentelemetry",
  "opentelemetry-otlp",
+ "parking_lot",
  "paste",
  "pin-project",
  "prometheus-client",

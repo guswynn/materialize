@@ -24,7 +24,8 @@ fn metrics_registry() {
     ));
     counter.inc();
 
-    let readings = reg.gather();
+    let registry = reg.registry();
+    let readings: Vec<_> = registry.iter().collect();
     assert_eq!(readings.len(), 1);
 }
 
@@ -36,12 +37,20 @@ fn thirdparty_metric_vecs() {
         help: "an third_party counter for testing",
         var_labels: ["label"],
     ));
-    let counter = cv.with_label_values(&["testing"]);
+    let counter = cv.with_label_values(&["testing".to_string()]);
     counter.inc();
-    let readings = reg.gather();
+    let registry = reg.registry();
+    let readings: Vec<_> = registry.iter().collect();
     assert_eq!(readings.len(), 1);
-    assert_eq!(readings[0].get_name(), "test_counter_third_party");
-    let metrics = readings[0].get_metric();
-    assert_eq!(metrics.len(), 1);
-    assert!((metrics[0].get_counter().get_value() - 1.0).abs() < f64::EPSILON);
+    assert_eq!(readings[0].0.name(), "test_counter_third_party");
+
+    let mut buffer = String::new();
+    prometheus_client::encoding::text::encode(&mut buffer, &reg.registry()).unwrap();
+
+    let expected = "# HELP test_counter_third_party an third_party counter for testing.\n"
+        .to_owned()
+        + "# TYPE test_counter_third_party counter\n"
+        + "test_counter_third_party_total{label=\"testing\"} 1\n"
+        + "# EOF\n";
+    assert_eq!(expected, buffer);
 }
