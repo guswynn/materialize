@@ -22,7 +22,7 @@ proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", feat
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.89"
+serde_json = "1.0.93"
 thiserror = "1.0.37"
 tokio = "1.24.2"
 tokio-stream = "0.1.11"
