@@ -19,6 +19,9 @@ use std::time::Duration;
 use anyhow::bail;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
+use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
@@ -27,6 +30,8 @@ use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext}
 use rdkafka::types::RDKafkaRespErr;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
+use tokio::runtime::Handle;
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn, Level};
 
 /// A reasonable default timeout when fetching metadata or partitions.
@@ -239,16 +244,34 @@ pub struct BrokerRewrite {
 #[derive(Clone)]
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
-    rewrites: BTreeMap<BrokerAddr, Arc<dyn Fn() -> BrokerRewrite + Send + Sync>>,
+    rewrites: Arc<Mutex<BTreeMap<BrokerAddr, Arc<dyn Fn() -> BrokerRewrite + Send + Sync>>>>,
+    default_override: Option<SshTunnelConfig>,
+    ssh_tunnel_manager: SshTunnelManager,
+    runtime: Handle,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
     /// Constructs a new context that wraps `inner`.
-    pub fn new(inner: C) -> BrokerRewritingClientContext<C> {
+    pub fn new(
+        inner: C,
+        runtime: Handle,
+        ssh_tunnel_manager: SshTunnelManager,
+    ) -> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
-            rewrites: BTreeMap::new(),
+            rewrites: Arc::new(Mutex::new(BTreeMap::new())),
+            default_override: None,
+            ssh_tunnel_manager,
+            runtime,
         }
+    }
+
+    /// Adds the default broker rewrite rule.
+    ///
+    /// Connections to brokers that aren't specified in other rewrites will be rewritten to connect to
+    /// `rewrite_host` and `rewrite_port` instead.
+    pub fn add_default_broker_rewrite(&mut self, tunnel: SshTunnelConfig) {
+        self.default_override = Some(tunnel);
     }
 
     /// Adds a broker rewrite rule.
@@ -260,11 +283,13 @@ impl<C> BrokerRewritingClientContext<C> {
     /// broker. This permits the rewrite to evolve over time, for example, if
     /// the rewrite is for a tunnel whose address changes if the tunnel fails
     /// and restarts.
-    pub fn add_broker_rewrite<F>(&mut self, broker: BrokerAddr, rewrite: F)
+    pub async fn add_broker_rewrite<F>(&self, broker: BrokerAddr, rewrite: F)
     where
         F: Fn() -> BrokerRewrite + Send + Sync + 'static,
     {
-        self.rewrites.insert(broker, Arc::new(rewrite));
+        let mut rewrites = self.rewrites.lock().await;
+
+        rewrites.insert(broker, Arc::new(rewrite));
     }
 
     /// Returns a reference to the wrapped context.
@@ -280,22 +305,92 @@ where
     const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
 
     fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
-        match self.rewrites.get(&addr) {
-            None => addr,
+        let mut rewrites = self.rewrites.blocking_lock();
+
+        let return_rewrite = |rewrite: BrokerRewrite| -> BrokerAddr {
+            let new_addr = BrokerAddr {
+                host: rewrite.host,
+                port: match rewrite.port {
+                    None => addr.port.clone(),
+                    Some(port) => port.to_string(),
+                },
+            };
+            info!(
+                "rewriting broker {}:{} to {}:{}",
+                addr.host, addr.port, new_addr.host, new_addr.port
+            );
+            new_addr
+        };
+
+        match rewrites.get(&addr) {
+            None => {
+                match &self.default_override {
+                    Some(default_tunnel) => {
+                        let broker = addr.clone();
+                        let default_tunnel = default_tunnel.clone();
+                        let ssh_tunnel_manager = self.ssh_tunnel_manager.clone();
+                        let runtime = self.runtime.clone();
+                        // We spawn an additional thread here, and immediately
+                        // join it so that the rdkafka thread calling this callback
+                        // spends all its time parked, instead of being
+                        // continuously woken up when we `block_on` the
+                        // ssh tunnel creation.
+                        //
+                        // Note that we hold the async lock while we create this tunnel; this is to
+                        // prevent competing threads from thrashing the ssh bastion host.
+                        let ssh_tunnel = match std::thread::spawn(move || {
+                            runtime.block_on(async move {
+                                ssh_tunnel_manager
+                                    .connect(
+                                        default_tunnel,
+                                        &broker.host,
+                                        broker.port.parse().unwrap(),
+                                    )
+                                    .await
+                            })
+                        })
+                        .join()
+                        {
+                            Ok(ssh_tunnel) => ssh_tunnel,
+                            Err(e) => std::panic::resume_unwind(e),
+                        };
+
+                        match ssh_tunnel {
+                            Ok(ssh_tunnel) => {
+                                let rewrite_tunnel = ssh_tunnel.clone();
+                                let rewrite = (rewrites.entry(addr.clone()).or_insert_with(|| {
+                                    Arc::new(move || {
+                                        let addr = rewrite_tunnel.local_addr();
+                                        BrokerRewrite {
+                                            host: addr.ip().to_string(),
+                                            port: Some(addr.port()),
+                                        }
+                                    })
+                                }))();
+
+                                return_rewrite(rewrite)
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "failed to create ssh tunnel for {:?}: {}",
+                                    addr,
+                                    e.display_with_causes()
+                                );
+                                // We have to give rdkafka an address, as this callback can't fail,
+                                // we just give it a random one that will never resolve.
+                                BrokerAddr {
+                                    host: "failed-ssh-tunnel.dev.materialize.com".to_string(),
+                                    port: 1337.to_string(),
+                                }
+                            }
+                        }
+                    }
+                    None => addr,
+                }
+            }
             Some(rewrite) => {
                 let rewrite = rewrite();
-                let new_addr = BrokerAddr {
-                    host: rewrite.host,
-                    port: match rewrite.port {
-                        None => addr.port.clone(),
-                        Some(port) => port.to_string(),
-                    },
-                };
-                info!(
-                    "rewriting broker {}:{} to {}:{}",
-                    addr.host, addr.port, new_addr.host, new_addr.port
-                );
-                new_addr
+                return_rewrite(rewrite)
             }
         }
     }
