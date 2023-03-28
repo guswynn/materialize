@@ -212,7 +212,9 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::healthcheck::{
+    ssh::ssh_health_operator, HealthStatusMessage, HealthStatusUpdate, StatusNamespace,
+};
 use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
@@ -249,6 +251,11 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut tokens = vec![];
 
+            let (ssh_status_subscription_callback, ssh_error_stream, health_operator_token) =
+                ssh_health_operator(root_scope.clone());
+
+            tokens.push(health_operator_token);
+
             let (feedback_handle, feedback) = into_time_scope.feedback(Default::default());
 
             let (mut outputs, source_health, token) = crate::render::sources::render_source(
@@ -261,6 +268,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 source_resume_uppers,
                 &feedback,
                 storage_state,
+                ssh_status_subscription_callback,
             );
             tokens.push(token);
 
@@ -324,7 +332,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 .concatenate(upper_streams)
                 .connect_loop(feedback_handle);
 
-            let health_stream = root_scope.concatenate(health_streams);
+            let health_stream =
+                root_scope.concatenate(health_streams.into_iter().chain(Some(ssh_error_stream)));
             let health_token = crate::healthcheck::health_operator(
                 into_time_scope,
                 Arc::clone(&storage_state.persist_clients),

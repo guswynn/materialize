@@ -18,7 +18,7 @@ pub async fn get_schemas(
     config: &Config,
 ) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
     let client = config
-        .connect("postgres_schemas", ssh_tunnel_manager)
+        .connect("postgres_schemas", ssh_tunnel_manager, None)
         .await?;
 
     Ok(client
@@ -52,7 +52,7 @@ pub async fn publication_info(
     oid_filter: Option<u32>,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config
-        .connect("postgres_publication_info", ssh_tunnel_manager)
+        .connect("postgres_publication_info", ssh_tunnel_manager, None)
         .await?;
 
     client

@@ -246,7 +246,12 @@ pub async fn build_kafka(
 ) -> Result<(), anyhow::Error> {
     let client: AdminClient<_> = connection
         .connection
-        .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
+        .create_with_context(
+            connection_cx,
+            MzClientContext::default(),
+            &BTreeMap::new(),
+            None,
+        )
         .await
         .context("creating admin client failed")?;
 
@@ -280,6 +285,7 @@ pub async fn build_kafka(
                     "auto.offset.reset" => "earliest".into(),
                     "enable.partition.eof" => "true".into(),
                 },
+                None,
             )
             .await?;
 

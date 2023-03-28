@@ -263,6 +263,7 @@ impl SourceRender for KafkaSourceConnection {
                         // as we present to kafka as a single consumer.
                         "client.id" => group_id,
                     },
+                    Some(config.ssh_status_subscription_callback.clone()),
                 )
                 .await;
 

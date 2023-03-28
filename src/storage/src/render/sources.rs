@@ -20,6 +20,7 @@ use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
 use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_ssh_util::tunnel_manager::SshStatusSubscriptionCallback;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
@@ -80,6 +81,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     storage_state: &crate::storage_state::StorageState,
+    ssh_status_subscription_callback: SshStatusSubscriptionCallback,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
@@ -136,6 +138,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         ),
         params,
         remap_collection_id: description.remap_collection_id.clone(),
+        ssh_status_subscription_callback,
     };
 
     // A set of channels (1 per worker) used to signal rehydration being finished

@@ -307,6 +307,7 @@ async fn purify_create_sink(
                     &connection_context,
                     MzClientContext::default(),
                     &BTreeMap::new(),
+                    None,
                 )
                 .await
                 .map_err(|e| {
@@ -477,6 +478,7 @@ async fn purify_create_source(
                     &connection_context,
                     MzClientContext::default(),
                     &BTreeMap::new(),
+                    None,
                 )
                 .await
                 .map_err(|e| {

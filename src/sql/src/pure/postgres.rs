@@ -372,7 +372,7 @@ mod privileges {
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<(), PlanError> {
         let client = config
-            .connect("check_schema_privileges", ssh_tunnel_manager)
+            .connect("check_schema_privileges", ssh_tunnel_manager, None)
             .await?;
 
         let schemas_len = schemas.len();
@@ -443,7 +443,7 @@ mod privileges {
         check_schema_privileges(config, schemas, ssh_tunnel_manager).await?;
 
         let client = config
-            .connect("check_table_privileges", ssh_tunnel_manager)
+            .connect("check_table_privileges", ssh_tunnel_manager, None)
             .await?;
 
         let tables_len = tables.len();
@@ -528,7 +528,7 @@ mod replica_identity {
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<(), PlanError> {
         let client = config
-            .connect("check_replica_identity_full", ssh_tunnel_manager)
+            .connect("check_replica_identity_full", ssh_tunnel_manager, None)
             .await?;
 
         let oids_len = oids.len();

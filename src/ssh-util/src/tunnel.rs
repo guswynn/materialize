@@ -22,6 +22,7 @@ use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use tokio::sync::broadcast::{channel, Receiver, Sender};
 use tokio::time;
 use tracing::{info, warn};
 
@@ -45,7 +46,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 
 /// Specifies an SSH tunnel.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SshTunnelConfig {
     /// The hostname of the SSH bastion server.
     pub host: String,
@@ -68,6 +69,32 @@ impl fmt::Debug for SshTunnelConfig {
     }
 }
 
+/// See `SshTunnelError`
+// This type is required because `Arc<anyhow::Error>`
+// does not implement `Error`, but this type does. We
+// need `SshTunnelError` to be `Clone` and also `Error`
+// so error chains are preserved and can be printed.
+// See
+// <https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=bbcaf787061e7edf4fdc3da15dcc96d2>
+// for an example.
+#[derive(thiserror::Error, Debug)]
+pub enum SshTunnelErrorInner {
+    #[error(transparent)]
+    Inner(#[from] anyhow::Error),
+}
+
+/// `Clone`-able errors produced by the creation
+/// of ssh tunnels.
+pub type SshTunnelError = Arc<SshTunnelErrorInner>;
+
+#[derive(Clone)]
+pub enum SshTunnelStatus {
+    Running,
+    Errored(SshTunnelError),
+}
+
+pub type SshStatusChannel = Receiver<SshTunnelStatus>;
+
 impl SshTunnelConfig {
     /// Establishes a connection to the specified host and port via the
     /// configured SSH tunnel.
@@ -84,6 +111,12 @@ impl SshTunnelConfig {
             remote_host, remote_port, self.user, self.host, self.port,
         );
 
+        let (error_tx, _) = channel(1000);
+
+        // N.B.
+        //
+        // We could probably move this into the look and use the above channel to report this
+        // initial connection error, but this is simpler and easier to read!
         info!(%tunnel_id, "connecting to ssh tunnel");
         let mut session = match connect(self).await {
             Ok(s) => s,
@@ -102,6 +135,7 @@ impl SshTunnelConfig {
         info!(%tunnel_id, %local_port, "connected to ssh tunnel");
         let local_port = Arc::new(AtomicU16::new(local_port));
 
+        let task_error_tx = error_tx.clone();
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();
@@ -118,6 +152,11 @@ impl SshTunnelConfig {
                             Ok(s) => s,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+
+                                let _ = task_error_tx.send(SshTunnelStatus::Errored(Arc::new(
+                                    SshTunnelErrorInner::from(e),
+                                )));
+
                                 continue;
                             }
                         };
@@ -125,18 +164,23 @@ impl SshTunnelConfig {
                             Ok(lp) => lp,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+                                let _ = task_error_tx.send(SshTunnelStatus::Errored(Arc::new(
+                                    SshTunnelErrorInner::from(e),
+                                )));
                                 continue;
                             }
                         };
                         session = s;
-                        local_port.store(lp, Ordering::SeqCst)
+                        local_port.store(lp, Ordering::SeqCst);
                     }
+                    let _ = task_error_tx.send(SshTunnelStatus::Running);
                 }
             }
         });
 
         Ok(SshTunnelHandle {
             local_port,
+            status_sender: error_tx,
             _join_handle: join_handle.abort_on_drop(),
         })
     }
@@ -153,6 +197,7 @@ impl SshTunnelConfig {
 #[derive(Debug)]
 pub struct SshTunnelHandle {
     local_port: Arc<AtomicU16>,
+    pub(crate) status_sender: Sender<SshTunnelStatus>,
     _join_handle: AbortOnDropHandle<()>,
 }
 

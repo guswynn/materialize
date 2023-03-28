@@ -19,15 +19,19 @@
 // present SSH tunnel errors that occur after the initial connection are
 // reported only to the logs, and not to users.
 
+use std::any::Any;
 use std::collections::{btree_map, BTreeMap};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
+use futures::stream::BoxStream;
 use scopeguard::ScopeGuard;
 use tokio::sync::watch;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 use tracing::info;
 
-use crate::tunnel::{SshTunnelConfig, SshTunnelHandle};
+use crate::tunnel::{SshTunnelConfig, SshTunnelHandle, SshTunnelStatus};
 
 /// Thread-safe manager of SSH tunnel connections.
 #[derive(Debug, Clone, Default)]
@@ -100,7 +104,11 @@ impl SshTunnelManager {
                 Action::Return(handle) => {
                     info!(
                         "reusing existing ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host, remote_port, config.user, config.host, config.port,
+                        remote_host,
+                        remote_port,
+                        config.user,
+                        config.host,
+                        config.port,
                     );
                     return Ok(handle);
                 }
@@ -123,7 +131,11 @@ impl SshTunnelManager {
                     // Try to connect.
                     info!(
                         "initiating new ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host, remote_port, config.user, config.host, config.port,
+                        remote_host,
+                        remote_port,
+                        config.user,
+                        config.host,
+                        config.port,
                     );
                     let handle = config.connect(remote_host, remote_port).await?;
 
@@ -148,11 +160,11 @@ impl SshTunnelManager {
 }
 
 /// Identifies a connection to a remote host via an SSH tunnel.
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
-struct SshTunnelKey {
-    config: SshTunnelConfig,
-    remote_host: String,
-    remote_port: u16,
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct SshTunnelKey {
+    pub config: SshTunnelConfig,
+    pub remote_host: String,
+    pub remote_port: u16,
 }
 
 /// The state of an SSH tunnel connection.
@@ -190,6 +202,66 @@ impl Deref for ManagedSshTunnelHandle {
 
     fn deref(&self) -> &SshTunnelHandle {
         &self.handle
+    }
+}
+
+pub type SshErrorSubscription = (SshTunnelKey, BoxStream<'static, SshTunnelStatus>);
+
+/// A callback that can be passed into `ManagedSshTunnelHandle::subscribe_to_status` that will be passed a keyed
+/// subscription to the given handle's underlying ssh tunnel. This is type-erased so that this
+/// crate does not need to understand how users are ingesting statuses.
+#[derive(Clone)]
+pub struct SshStatusSubscriptionCallback {
+    pub callback:
+        Arc<dyn Fn(SshTunnelKey, BoxStream<'static, SshTunnelStatus>) + Send + Sync + 'static>,
+    pub token: Arc<dyn Any + Send + Sync>,
+}
+
+impl SshStatusSubscriptionCallback {
+    /// Create a new `SshStatusSubscriptionCallback` from a closure.
+    pub fn new<F: Fn(SshTunnelKey, BoxStream<'static, SshTunnelStatus>) + Send + Sync + 'static>(
+        callback: F,
+        token: Arc<dyn Any + Send + Sync>,
+    ) -> Self {
+        Self {
+            callback: Arc::new(callback),
+            token,
+        }
+    }
+
+    /// Returns a token that, when kept alive, ensures that the downstream consumer of
+    /// the given ssh status subscription waits for continued calls to
+    /// `ManagedSshTunnelHandle::subscribe_to_status`. This is required to be saved at least once
+    /// for any `SshStatusSubscriptionCallback` that is passed into `subscribe_to_status`.
+    ///
+    /// Alternatively, `ManagedSshTunnelHandle::subscribe_to_status` returns a reference to this
+    /// token.
+    pub fn save_interest(&self) -> Arc<dyn Any + Send + Sync + 'static> {
+        Arc::clone(&self.token)
+    }
+}
+
+impl ManagedSshTunnelHandle {
+    /// Subscribes to the status of the underlying ssh tunnel, using the
+    /// `SshStatusSubscriptionCallback`. Returns a token that must be kept alive
+    /// as long as the user is interested in receiving updates.
+    ///
+    /// The returned token must be saved as least once per `SshStatusSubscriptionCallback`, either
+    /// from here or from `SshStatusSubscriptionCallback::save_interest`.
+    pub fn subscribe_to_status(
+        &self,
+        callback: &SshStatusSubscriptionCallback,
+    ) -> Arc<dyn Any + Send + Sync + 'static> {
+        (callback.callback)(
+            self.key.clone(),
+            Box::pin(
+                // We filter out errors from receivers lagging. This should be rare,
+                // but the next `check` interval should catch the receiver up.
+                BroadcastStream::new(self.handle.status_sender.subscribe())
+                    .filter_map(move |status| status.ok()),
+            ),
+        );
+        callback.save_interest()
     }
 }
 

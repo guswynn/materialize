@@ -132,6 +132,9 @@ pub struct RawSourceCreationConfig {
     pub params: SourceCreationParams,
     /// The ID of this source remap/progress collection.
     pub remap_collection_id: GlobalId,
+    /// A sender to send ssh status channels to be processed by the `ssh_health_operator`.
+    pub ssh_status_subscription_callback:
+        mz_ssh_util::tunnel_manager::SshStatusSubscriptionCallback,
 }
 
 impl RawSourceCreationConfig {
@@ -436,6 +439,7 @@ where
         shared_remap_upper,
         params: _,
         remap_collection_id,
+        ssh_status_subscription_callback: _,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -598,6 +602,7 @@ where
         shared_remap_upper: _,
         params: _,
         remap_collection_id: _,
+        ssh_status_subscription_callback: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();

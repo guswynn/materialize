@@ -195,13 +195,43 @@ impl SourceRender for PostgresSourceConnection {
             (output, res)
         });
 
+        // N.B.
+        //
+        // In this module we allow the rest of the status reporting handle complexities like ssh
+        // errors, and simply attach ssh error subscriptions to the `config.ssh_subscription_sender`
+        // (in the `snapshot` and `replication` submodules. However, there are two subtleties that
+        // cannot be easily worked around that are documented here:
+        //
+        // - When an ssh tunnel dies, we will get an error from the pg client and immediately
+        // sending _halting_ status below. This will likely be reported and restart the source
+        // before the task managing the ssh tunnel can report what is happening. However, when we
+        // attempt to restart the source, we will get an error correctly categorized as an ssh one.
+        //   - Note that transient errors in the tunnel that do not break the postgres client (if
+        //   such errors exist) will indeed report an ssh error, but will likely immediately break
+        //   the pg client as the tunnel's local port will change.
+        // - If more than 1 postgres source is sharing a tunnel to the same postgres server, and
+        // only 1 of them has an error related to the ssh tunnel, then on restart that source will
+        // have some generic postgres error status. This is because any existing postgres client
+        // ensures that the ssh tunnel's task lives, which the restarting postgres source will
+        // reuse and assume is healthy. This is considered rare (if not impossible), and difficult
+        // to work around, so we do not attempt to.
+
         let health = snapshot_err.concat(&repl_err).flat_map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let namespace = if matches!(
+                &*err,
+                TransientError::PostgresError(PostgresError::Ssh(_))
+                    | TransientError::PostgresError(PostgresError::SshIo(_))
+            ) {
+                StatusNamespace::Ssh
+            } else {
+                Self::STATUS_NAMESPACE.clone()
+            };
             let mut statuses = vec![HealthStatusMessage {
                 index: 0,
-                namespace: Self::STATUS_NAMESPACE.clone(),
+                namespace: namespace.clone(),
                 update,
             }];
 
@@ -210,7 +240,7 @@ impl SourceRender for PostgresSourceConnection {
                 let status = HealthStatusUpdate::stalled(err_string.clone(), None);
                 HealthStatusMessage {
                     index: *index,
-                    namespace: Self::STATUS_NAMESPACE.clone(),
+                    namespace,
                     update: status,
                 }
             }));

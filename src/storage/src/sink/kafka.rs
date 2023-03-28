@@ -471,6 +471,7 @@ impl KafkaSinkState {
                             "queue.buffering.max.ms" => format!("{}", 10),
                             "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
                         },
+                        None,
                     )
                     .await
             })()
@@ -498,6 +499,7 @@ impl KafkaSinkState {
                         "auto.offset.reset" => "earliest".into(),
                         "enable.partition.eof" => "true".into(),
                     },
+                    None,
                 )
                 .await,
         )

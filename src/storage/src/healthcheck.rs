@@ -39,6 +39,8 @@ use tracing::{error, info, trace};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 
+pub mod ssh;
+
 pub async fn write_to_persist(
     collection_id: GlobalId,
     new_status: &str,
@@ -186,15 +188,11 @@ struct PerWorkerHealthStatus {
 impl PerWorkerHealthStatus {
     fn merge_update(
         &mut self,
-        mut worker: usize,
+        worker: usize,
         namespace: StatusNamespace,
         update: HealthStatusUpdate,
         only_greater: bool,
     ) {
-        if namespace.is_sidechannel() {
-            worker = 0;
-        }
-
         let errors = &mut self.errors_by_worker[worker];
         match errors.entry(namespace) {
             Entry::Vacant(v) => {
@@ -986,10 +984,8 @@ mod tests {
                     errors: Some("ssh: uhoh".to_string()),
                     ..Default::default()
                 }]),
-                // Note this is from a different work, but it merges as if its from
-                // the same worker.
                 Update(TestUpdate {
-                    worker_id: 1,
+                    worker_id: 0,
                     namespace: StatusNamespace::Ssh,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled("uhoh2".to_string(), None),

@@ -28,7 +28,9 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
-use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
+use mz_ssh_util::tunnel_manager::{
+    ManagedSshTunnelHandle, SshStatusSubscriptionCallback, SshTunnelManager,
+};
 use mz_tracing::CloneableEnvFilter;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -397,6 +399,7 @@ impl KafkaConnection {
         connection_context: &ConnectionContext,
         context: C,
         extra_options: &BTreeMap<&str, String>,
+        ssh_status_subscription_callback: Option<SshStatusSubscriptionCallback>,
     ) -> Result<T, anyhow::Error>
     where
         C: ClientContext,
@@ -459,6 +462,10 @@ impl KafkaConnection {
             connection_context.ssh_tunnel_manager.clone(),
         );
 
+        if let Some(callback) = &ssh_status_subscription_callback {
+            context.with_ssh_status_subscription_callback(callback.clone());
+        }
+
         match &self.default_tunnel {
             Tunnel::Direct => {
                 // By default, don't offer a default override for broker address lookup.
@@ -518,9 +525,16 @@ impl KafkaConnection {
                         .await
                         .context("creating ssh tunnel")?;
 
+                    let ssh_token = if let Some(callback) = &ssh_status_subscription_callback {
+                        Some(ssh_tunnel.subscribe_to_status(callback))
+                    } else {
+                        None
+                    };
+
                     context
                         .add_broker_rewrite(addr, move || {
                             let addr = ssh_tunnel.local_addr();
+                            let _ssh_token = &ssh_token;
                             BrokerRewrite {
                                 host: addr.ip().to_string(),
                                 port: Some(addr.port()),
@@ -541,7 +555,7 @@ impl KafkaConnection {
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
         let consumer: BaseConsumer<_> = self
-            .create_with_context(connection_context, context, &BTreeMap::new())
+            .create_with_context(connection_context, context, &BTreeMap::new(), None)
             .await?;
 
         // librdkafka doesn't expose an API for determining whether a connection to
@@ -1092,6 +1106,7 @@ impl PostgresConnection<InlinedConnection> {
             .connect(
                 "connection validation",
                 &connection_context.ssh_tunnel_manager,
+                None,
             )
             .await?;
         Ok(())

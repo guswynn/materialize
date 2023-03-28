@@ -4365,6 +4365,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tracing",
  "url",
  "workspace-hack",
@@ -5365,6 +5366,7 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "futures",
  "mz-ore",
  "openssh",
  "openssh-mux-client",
@@ -5375,7 +5377,9 @@ dependencies = [
  "serde_json",
  "ssh-key",
  "tempfile",
+ "thiserror",
  "tokio",
+ "tokio-stream",
  "tracing",
  "workspace-hack",
  "zeroize",
@@ -5688,6 +5692,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tonic-build",
  "tracing",
  "url",

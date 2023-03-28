@@ -20,8 +20,8 @@ use anyhow::bail;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
-use mz_ssh_util::tunnel::SshTunnelConfig;
-use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_ssh_util::tunnel::{SshTunnelConfig, SshTunnelErrorInner, SshTunnelStatus};
+use mz_ssh_util::tunnel_manager::{SshStatusSubscriptionCallback, SshTunnelKey, SshTunnelManager};
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
@@ -31,7 +31,9 @@ use rdkafka::types::RDKafkaRespErr;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use tokio::runtime::Handle;
+use tokio::sync::broadcast::channel;
 use tokio::sync::Mutex;
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tracing::{debug, error, info, warn, Level};
 
 /// A reasonable default timeout when fetching metadata or partitions.
@@ -180,6 +182,9 @@ impl FromStr for MzKafkaError {
             Ok(Self::AllBrokersDown)
         } else if s.contains("Unknown topic or partition") || s.contains("Unknown partition") {
             Ok(Self::UnknownTopicOrPartition)
+        } else if s.contains("failed to connect to the remote host") {
+            // This is an error logged synthesized by `DynamicBrokerRewritingClientContext`
+            Ok(Self::Internal(s.to_string()))
         } else {
             Err(())
         }
@@ -248,6 +253,10 @@ pub struct BrokerRewritingClientContext<C> {
     default_override: Option<SshTunnelConfig>,
     ssh_tunnel_manager: SshTunnelManager,
     runtime: Handle,
+    ssh_status_subsciption_callback: Option<(
+        SshStatusSubscriptionCallback,
+        std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    )>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -263,7 +272,19 @@ impl<C> BrokerRewritingClientContext<C> {
             default_override: None,
             ssh_tunnel_manager,
             runtime,
+            ssh_status_subsciption_callback: None,
         }
+    }
+
+    /// Adds a callback to add ssh status subscriptions too. Unused if `add_default_broker_rewrite`
+    /// has not be used.
+    pub fn with_ssh_status_subscription_callback(
+        &mut self,
+        callback: SshStatusSubscriptionCallback,
+    ) -> &mut Self {
+        let interest = callback.save_interest();
+        self.ssh_status_subsciption_callback = Some((callback, interest));
+        self
     }
 
     /// Adds the default broker rewrite rule.
@@ -327,7 +348,9 @@ where
                 match &self.default_override {
                     Some(default_tunnel) => {
                         let broker = addr.clone();
+                        let broker2 = addr.clone();
                         let default_tunnel = default_tunnel.clone();
+                        let default_tunnel2 = default_tunnel.clone();
                         let ssh_tunnel_manager = self.ssh_tunnel_manager.clone();
                         let runtime = self.runtime.clone();
                         // We spawn an additional thread here, and immediately
@@ -343,8 +366,8 @@ where
                                 ssh_tunnel_manager
                                     .connect(
                                         default_tunnel,
-                                        &broker.host,
-                                        broker.port.parse().unwrap(),
+                                        &broker2.host,
+                                        broker2.port.parse().unwrap(),
                                     )
                                     .await
                             })
@@ -357,6 +380,10 @@ where
 
                         match ssh_tunnel {
                             Ok(ssh_tunnel) => {
+                                if let Some((callback, _)) = &self.ssh_status_subsciption_callback {
+                                    ssh_tunnel.subscribe_to_status(callback);
+                                }
+
                                 let rewrite_tunnel = ssh_tunnel.clone();
                                 let rewrite = (rewrites.entry(addr.clone()).or_insert_with(|| {
                                     Arc::new(move || {
@@ -376,6 +403,39 @@ where
                                     addr,
                                     e.display_with_causes()
                                 );
+
+                                // even if we drop the `Sender` this will be communicated:
+                                // `https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=6583927672b3e6e623ae08cc213d151b`
+                                //
+                                // This error status will be cleared if next time ssh tunnel creation
+                                // succeeds.
+                                //
+                                // This code requires a thorough understanding of the `mz_ssh_util` crate.
+                                // That crate doesn't expose a better way to do this, because this is very,
+                                // very specific to rdkafka.
+                                //
+                                // Note that local testing has confirmed that rdkafka doesn't save the
+                                // returned error hostname and port, and it re-attempts to translate the
+                                // broker address until it can connect successfully.
+                                if let Some((callback, _)) = &self.ssh_status_subsciption_callback {
+                                    let (tx, rx) = channel(1);
+                                    let _ = tx.send(SshTunnelStatus::Errored(Arc::new(
+                                        SshTunnelErrorInner::Inner(e),
+                                    )));
+                                    (callback.callback)(
+                                        SshTunnelKey {
+                                            config: default_tunnel2,
+                                            remote_host: broker.host.clone(),
+                                            remote_port: broker.port.parse().unwrap(),
+                                        },
+                                        Box::pin(
+                                            // See `ManagedSshTunnelHandle::subscribe_to_status` for an explanation
+                                            BroadcastStream::new(rx)
+                                                .filter_map(move |status| status.ok()),
+                                        ),
+                                    )
+                                }
+
                                 // We have to give rdkafka an address, as this callback can't fail,
                                 // we just give it a random one that will never resolve.
                                 BrokerAddr {
