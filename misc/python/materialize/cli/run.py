@@ -192,7 +192,7 @@ def main() -> int:
                 "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
                 f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
-                f"--persist-blob-url=file://{mzdata}/persist/blob",
+                f"--persist-blob-url=s3://mz-test-persist-1d-lifecycle-delete/gus-test",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
