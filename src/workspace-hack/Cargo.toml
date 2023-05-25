@@ -73,7 +73,7 @@ phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
-proc-macro2 = { version = "1.0.54", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.58", features = ["span-locations"] }
 prost = { git = "https://github.com/MaterializeInc/prost", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
 prost-types = { git = "https://github.com/MaterializeInc/prost" }
@@ -170,7 +170,7 @@ phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
-proc-macro2 = { version = "1.0.54", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.58", features = ["span-locations"] }
 prost = { git = "https://github.com/MaterializeInc/prost", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
 prost-types = { git = "https://github.com/MaterializeInc/prost" }
