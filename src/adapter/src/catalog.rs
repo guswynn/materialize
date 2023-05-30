@@ -7542,6 +7542,9 @@ impl Catalog {
                 }
             },
             finalize_shards: self.system_config().enable_storage_shard_finalization(),
+            storage_dataflow_max_inflight_bytes: self
+                .system_config()
+                .storage_dataflow_max_inflight_bytes(),
         }
     }
 

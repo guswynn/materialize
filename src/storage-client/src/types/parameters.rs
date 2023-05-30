@@ -36,6 +36,7 @@ pub struct StorageParameters {
     /// only disable the actual finalization of shards, not registering them for
     /// finalization.
     pub finalize_shards: bool,
+    pub storage_dataflow_max_inflight_bytes: Option<usize>,
 }
 
 impl StorageParameters {
@@ -49,6 +50,7 @@ impl StorageParameters {
             keep_n_sink_status_history_entries,
             upsert_rocksdb_tuning_config,
             finalize_shards,
+            storage_dataflow_max_inflight_bytes,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -56,7 +58,8 @@ impl StorageParameters {
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
-        self.finalize_shards = finalize_shards
+        self.finalize_shards = finalize_shards;
+        self.storage_dataflow_max_inflight_bytes = storage_dataflow_max_inflight_bytes;
     }
 }
 
@@ -73,6 +76,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             ),
             upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
             finalize_shards: self.finalize_shards,
+            storage_dataflow_max_inflight_bytes: self
+                .storage_dataflow_max_inflight_bytes
+                .map(u64::cast_from),
         }
     }
 
@@ -94,6 +100,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .upsert_rocksdb_tuning_config
                 .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
             finalize_shards: proto.finalize_shards,
+            storage_dataflow_max_inflight_bytes: proto
+                .storage_dataflow_max_inflight_bytes
+                .map(usize::cast_from),
         })
     }
 }
