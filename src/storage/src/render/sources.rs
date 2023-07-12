@@ -75,6 +75,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     storage_state: &mut crate::storage_state::StorageState,
+    cluster_size: Option<String>,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
@@ -211,6 +212,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             error_collections,
             storage_state,
             base_source_config.clone(),
+            cluster_size,
         );
         needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
@@ -232,6 +234,7 @@ fn render_source_stream<G>(
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
+    cluster_size: Option<String>,
 ) -> (
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,

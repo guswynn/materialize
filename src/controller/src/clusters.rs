@@ -253,6 +253,7 @@ where
             storage_location: ClusterReplicaLocation,
             compute_location: ClusterReplicaLocation,
             metrics_task_join_handle: Option<AbortOnDropHandle<()>>,
+            size: Option<String>,
         }
 
         // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
@@ -297,6 +298,7 @@ where
                                 storage_location,
                                 compute_location,
                                 metrics_task_join_handle: None,
+                                size: None,
                             },
                         ))
                     }
@@ -323,6 +325,7 @@ where
                                 storage_location,
                                 compute_location,
                                 metrics_task_join_handle: Some(metrics_task_join_handle),
+                                size: Some(m.size),
                             },
                         ))
                     }
@@ -347,11 +350,13 @@ where
         drop(replica_stream);
 
         for (cluster_id, replicas) in replicas {
+            let storage_replica = &replicas.last();
             // We only connect to the last replica (chosen arbitrarily)
             // for storage, until we support multi-replica storage objects
             self.storage.connect_replica(
                 cluster_id,
                 replicas.last().unwrap().storage_location.clone(),
+                storage_replica.map(|r| r.size),
             );
 
             for ReplicaInfo {
@@ -360,6 +365,7 @@ where
                 storage_location: _,
                 compute_location,
                 metrics_task_join_handle,
+                size: _,
             } in replicas
             {
                 if let Some(jh) = metrics_task_join_handle {
