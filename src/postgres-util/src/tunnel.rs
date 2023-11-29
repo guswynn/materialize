@@ -265,11 +265,12 @@ impl Config {
                 Ok(client)
             }
             TunnelConfig::AwsPrivatelink { connection_id } => {
-                let (host, port) = self.address()?;
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
-                let tcp_stream = TokioTcpStream::connect((privatelink_host, port)).await?;
-                let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
+
+                let mut postgres_config = postgres_config.clone();
+                postgres_config.host(&privatelink_host);
+
+                let (client, connection) = postgres_config.connect(tls).await?;
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
