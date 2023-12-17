@@ -41,7 +41,7 @@ flate2 = { version = "1.0.24", features = ["zlib"] }
 futures-channel = { version = "0.3.28", features = ["sink"] }
 futures-core = { version = "0.3.28" }
 futures-executor = { version = "0.3.25" }
-futures-io = { version = "0.3.28" }
+futures-io = { version = "0.3.29" }
 futures-sink = { version = "0.3.28" }
 futures-task = { version = "0.3.28" }
 futures-util = { version = "0.3.28", features = ["channel", "io", "sink"] }
@@ -150,7 +150,7 @@ flate2 = { version = "1.0.24", features = ["zlib"] }
 futures-channel = { version = "0.3.28", features = ["sink"] }
 futures-core = { version = "0.3.28" }
 futures-executor = { version = "0.3.25" }
-futures-io = { version = "0.3.28" }
+futures-io = { version = "0.3.29" }
 futures-sink = { version = "0.3.28" }
 futures-task = { version = "0.3.28" }
 futures-util = { version = "0.3.28", features = ["channel", "io", "sink"] }
