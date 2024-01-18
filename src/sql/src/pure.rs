@@ -595,7 +595,7 @@ async fn purify_create_source(
                 (Some(start_offsets), None) => {
                     // Validate the start offsets.
                     kafka_util::validate_start_offsets(
-                        consumer,
+                        consumer.clone(),
                         &topic,
                         start_offsets,
                         storage_configuration
@@ -608,7 +608,7 @@ async fn purify_create_source(
                 (None, Some(time_offset)) => {
                     // Translate `START TIMESTAMP` to a start offset.
                     let start_offsets = kafka_util::lookup_start_offsets(
-                        consumer,
+                        consumer.clone(),
                         &topic,
                         time_offset,
                         now,
@@ -635,6 +635,15 @@ async fn purify_create_source(
                     });
                 }
             }
+            eprintln!("BEGINNING 5s SLEEP BEFORE DROPPING CONSUMER");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            eprintln!("DROPPING CONSUMER");
+            // This could be implicit if we wanted it to
+            drop(consumer);
+            /* this fixes the bug
+            std::thread::spawn(move || {
+                drop(consumer);
+            });*/
         }
         CreateSourceConnection::TestScript { desc_json: _ } => {
             if let Some(referenced_subsources) = referenced_subsources {

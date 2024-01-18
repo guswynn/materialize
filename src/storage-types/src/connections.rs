@@ -475,12 +475,14 @@ impl<T: Send + 'static> Drop for RdkafkaWrapper<T> {
     fn drop(&mut self) {
         let handle = tokio::runtime::Handle::try_current();
 
+        println!("HERE");
         let inner = self.inner.take().unwrap();
         // Note that `Arc::into_inner` is guaranteed to return `Some(_)` for _exactly_
         // one clone of the `Arc`.
         let inner = Arc::into_inner(inner);
 
         if let (Some(inner), Ok(handle)) = (inner, handle) {
+            println!("SPAWNING");
             handle.spawn_blocking_named(|| "drop_rdkafka_object".to_string(), move || drop(inner));
         }
     }
