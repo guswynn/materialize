@@ -487,7 +487,13 @@ where
                             }
                         }
                     }
-                    None => addr,
+                    None => {
+                        self.runtime.block_on(async {
+                            eprintln!("BEGINNING 10s TRANSLATION SLEEP");
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        });
+                        addr
+                    }
                 }
             }
             Some(rewrite) => return_rewrite(&rewrite),

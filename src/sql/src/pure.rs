@@ -636,6 +636,15 @@ async fn purify_create_source(
                     });
                 }
             }
+            eprintln!("BEGINNING 5s SLEEP BEFORE DROPPING CONSUMER");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            eprintln!("DROPPING CONSUMER");
+            // This could be implicit if we wanted it to
+            drop(consumer);
+            /* this fixes the bug
+            std::thread::spawn(move || {
+                drop(consumer);
+            });*/
         }
         CreateSourceConnection::TestScript { desc_json: _ } => {
             if let Some(referenced_subsources) = referenced_subsources {
