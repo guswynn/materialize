@@ -151,7 +151,7 @@ impl SourceRender for KafkaSourceConnection {
         let (_progress_output, progress_stream) = builder.new_output();
         let (mut health_output, health_stream) = builder.new_output();
 
-        let button = builder.build(move |caps| async move {
+        let button = builder.build(move |caps| Box::pin(async move {
             let [mut data_cap, mut progress_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
             let client_id = self.client_id(&config.config.connection_context, config.id);
@@ -696,7 +696,7 @@ impl SourceRender for KafkaSourceConnection {
                     _ = offset_commit_loop.as_mut() => {},
                 }
             }
-        });
+        }));
 
         (
             stream.as_collection(),

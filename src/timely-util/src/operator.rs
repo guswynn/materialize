@@ -82,7 +82,7 @@ where
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
-        BFut: Future + 'static,
+        BFut: Future<Output = ()> + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
 
     /// Creates a new dataflow operator that partitions its input streams by a parallelization
@@ -106,7 +106,7 @@ where
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
-        BFut: Future + 'static,
+        BFut: Future<Output = ()> + 'static,
         P1: ParallelizationContract<G::Timestamp, D1>,
         P2: ParallelizationContract<G::Timestamp, D2>;
 
@@ -116,7 +116,7 @@ where
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
         B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
-        BFut: Future + 'static,
+        BFut: Future<Output = ()> + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
 
     /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
@@ -302,7 +302,7 @@ where
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
-        BFut: Future + 'static,
+        BFut: Future<Output = ()> + 'static,
         P: ParallelizationContract<G::Timestamp, D1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
@@ -314,7 +314,7 @@ where
         builder.build(move |mut capabilities| {
             // `capabilities` should be a single-element vector.
             let capability = capabilities.pop().unwrap();
-            constructor(capability, operator_info, input, output)
+            Box::pin(constructor(capability, operator_info, input, output))
         });
 
         stream
@@ -338,7 +338,7 @@ where
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
-        BFut: Future + 'static,
+        BFut: Future<Output = ()> + 'static,
         P1: ParallelizationContract<G::Timestamp, D1>,
         P2: ParallelizationContract<G::Timestamp, D2>,
     {
@@ -352,7 +352,13 @@ where
         builder.build(move |mut capabilities| {
             // `capabilities` should be a single-element vector.
             let capability = capabilities.pop().unwrap();
-            constructor(capability, operator_info, input1, input2, output)
+            Box::pin(constructor(
+                capability,
+                operator_info,
+                input1,
+                input2,
+                output,
+            ))
         });
 
         stream
@@ -364,7 +370,7 @@ where
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
         B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
-        BFut: Future + 'static,
+        BFut: Future<Output = ()> + 'static,
         P: ParallelizationContract<G::Timestamp, D1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
@@ -372,7 +378,7 @@ where
 
         let input = builder.new_disconnected_input(self, pact);
 
-        builder.build(move |_capabilities| constructor(operator_info, input));
+        builder.build(move |_capabilities| Box::pin(constructor(operator_info, input)));
     }
 
     // XXX(guswynn): file an minimization bug report for the logic flat_map
@@ -621,7 +627,8 @@ where
         OperatorInfo,
         AsyncOutputHandle<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
     ) -> BFut,
-    BFut: Future + 'static,
+    // lalala
+    BFut: Future<Output = ()> + 'static,
 {
     let mut builder = OperatorBuilderAsync::new(name, scope.clone());
     let operator_info = builder.operator_info();
@@ -631,7 +638,7 @@ where
     builder.build(move |mut capabilities| {
         // `capabilities` should be a single-element vector.
         let capability = capabilities.pop().unwrap();
-        constructor(capability, operator_info, output)
+        Box::pin(constructor(capability, operator_info, output))
     });
 
     stream

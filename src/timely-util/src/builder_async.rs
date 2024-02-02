@@ -515,10 +515,9 @@ impl<G: Scope> OperatorBuilder<G> {
     /// button that when pressed it will cause the logic future to be dropped and input handles to
     /// be drained. The button can be converted into a token by using
     /// [`Button::press_on_drop`]
-    pub fn build<B, L>(self, constructor: B) -> Button
+    pub fn build<B>(self, constructor: B) -> Button
     where
-        B: FnOnce(Vec<Capability<G::Timestamp>>) -> L,
-        L: Future + 'static,
+        B: FnOnce(Vec<Capability<G::Timestamp>>) -> futures::future::LocalBoxFuture<'static, ()>,
     {
         let operator_waker = self.operator_waker;
         let mut input_frontiers = self.input_frontiers;
@@ -641,19 +640,22 @@ impl<G: Scope> OperatorBuilder<G> {
     {
         // Create a new completely disconnected output
         let (mut error_output, error_stream) = self.new_output();
-        let button = self.build(|mut caps| async move {
-            let error_cap = caps.pop().unwrap();
-            let mut caps = caps
-                .into_iter()
-                .map(CapabilitySet::from_elem)
-                .collect::<Vec<_>>();
-            if let Err(err) = constructor(&mut *caps).await {
-                error_output.give(&error_cap, Rc::new(err)).await;
-                drop(error_cap);
-                // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
-                // the capabilities and could produce incorrect progress statements.
-                std::future::pending().await
-            }
+        let button = self.build(|mut caps| {
+            // lalala
+            Box::pin(async move {
+                let error_cap = caps.pop().unwrap();
+                let mut caps = caps
+                    .into_iter()
+                    .map(CapabilitySet::from_elem)
+                    .collect::<Vec<_>>();
+                if let Err(err) = constructor(&mut *caps).await {
+                    error_output.give(&error_cap, Rc::new(err)).await;
+                    drop(error_cap);
+                    // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
+                    // the capabilities and could produce incorrect progress statements.
+                    std::future::pending().await
+                }
+            })
         });
         (button, error_stream)
     }

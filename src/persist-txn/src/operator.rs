@@ -159,46 +159,48 @@ where
     let name = format!("{} [{}]", name, unique_id);
     let (mut txns_output, txns_stream) = builder.new_output();
 
-    let shutdown_button = builder.build(move |capabilities| async move {
-        if worker_idx != chosen_worker {
-            return;
-        }
+    let shutdown_button = builder.build(move |capabilities| {
+        Box::pin(async move {
+            if worker_idx != chosen_worker {
+                return;
+            }
 
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
-        let client = client.await;
-        let mut txns_subscribe = {
-            let cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
-            assert!(cache.buf.is_empty());
-            cache.txns_subscribe
-        };
-        loop {
-            let events = txns_subscribe.next(None).await;
-            for event in events {
-                let parts = match event {
-                    ListenEvent::Progress(frontier) => {
-                        let progress = frontier
-                            .into_option()
-                            .expect("nothing should close the txns shard");
-                        debug!("{} emitting progress {:?}", name, progress);
-                        cap.downgrade(&progress);
-                        continue;
+            let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+            let client = client.await;
+            let mut txns_subscribe = {
+                let cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+                assert!(cache.buf.is_empty());
+                cache.txns_subscribe
+            };
+            loop {
+                let events = txns_subscribe.next(None).await;
+                for event in events {
+                    let parts = match event {
+                        ListenEvent::Progress(frontier) => {
+                            let progress = frontier
+                                .into_option()
+                                .expect("nothing should close the txns shard");
+                            debug!("{} emitting progress {:?}", name, progress);
+                            cap.downgrade(&progress);
+                            continue;
+                        }
+                        ListenEvent::Updates(parts) => parts,
+                    };
+                    let mut updates = Vec::new();
+                    TxnsCache::<T, C>::fetch_parts(
+                        Some(data_id),
+                        &mut txns_subscribe,
+                        parts,
+                        &mut updates,
+                    )
+                    .await;
+                    if !updates.is_empty() {
+                        debug!("{} emitting updates {:?}", name, updates);
+                        txns_output.give_container(&cap, &mut updates).await;
                     }
-                    ListenEvent::Updates(parts) => parts,
-                };
-                let mut updates = Vec::new();
-                TxnsCache::<T, C>::fetch_parts(
-                    Some(data_id),
-                    &mut txns_subscribe,
-                    parts,
-                    &mut updates,
-                )
-                .await;
-                if !updates.is_empty() {
-                    debug!("{} emitting updates {:?}", name, updates);
-                    txns_output.give_container(&cap, &mut updates).await;
                 }
             }
-        }
+        })
     });
     (txns_stream, shutdown_button.press_on_drop())
 }
@@ -238,185 +240,187 @@ where
     let txns_input = builder.new_disconnected_input(&txns, Pipeline);
     let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
 
-    let shutdown_button = builder.build(move |capabilities| async move {
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
-        let client = client.await;
-        let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
-        let mut txns_cache = TxnsCacheTimely {
-            name: name.clone(),
-            state,
-            input: txns_input,
-            buf: Vec::new(),
-        };
+    let shutdown_button = builder.build(move |capabilities| {
+        Box::pin(async move {
+            let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+            let client = client.await;
+            let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
+            let mut txns_cache = TxnsCacheTimely {
+                name: name.clone(),
+                state,
+                input: txns_input,
+                buf: Vec::new(),
+            };
 
-        txns_cache.update_gt(&as_of).await;
-        let snap = txns_cache.state.data_snapshot(data_id, as_of.clone());
-        let data_write = client
-            .open_writer::<K, V, T, D>(
-                data_id,
-                Arc::clone(&data_key_schema),
-                Arc::clone(&data_val_schema),
-                Diagnostics::from_purpose("data read physical upper"),
-            )
-            .await
-            .expect("schema shouldn't change");
-        let empty_to = snap.unblock_read(data_write).await;
-        debug!(
-            "{} {:.9} starting as_of={:?} empty_to={:?}",
-            name,
-            data_id.to_string(),
-            as_of,
-            empty_to.elements()
-        );
+            txns_cache.update_gt(&as_of).await;
+            let snap = txns_cache.state.data_snapshot(data_id, as_of.clone());
+            let data_write = client
+                .open_writer::<K, V, T, D>(
+                    data_id,
+                    Arc::clone(&data_key_schema),
+                    Arc::clone(&data_val_schema),
+                    Diagnostics::from_purpose("data read physical upper"),
+                )
+                .await
+                .expect("schema shouldn't change");
+            let empty_to = snap.unblock_read(data_write).await;
+            debug!(
+                "{} {:.9} starting as_of={:?} empty_to={:?}",
+                name,
+                data_id.to_string(),
+                as_of,
+                empty_to.elements()
+            );
 
-        // We've ensured that the data shard's physical upper is past as_of, so
-        // start by passing through data and frontier updates from the input
-        // until it is past the as_of.
-        let mut read_data_to = empty_to;
-        let mut output_progress_exclusive = T::minimum();
-        loop {
+            // We've ensured that the data shard's physical upper is past as_of, so
+            // start by passing through data and frontier updates from the input
+            // until it is past the as_of.
+            let mut read_data_to = empty_to;
+            let mut output_progress_exclusive = T::minimum();
             loop {
-                // This only returns None when there are no more data left. Turn
-                // it into an empty frontier progress so we can re-use the
-                // shutdown code below.
-                let event = passthrough_input
-                    .next()
-                    .await
-                    .unwrap_or_else(|| Event::Progress(Antichain::new()));
-                match event {
-                    // NB: Ignore the data_cap because this input is
-                    // disconnected.
-                    Event::Data(_data_cap, data) => {
-                        // NB: Nothing to do here for `until` because the both
-                        // `shard_source` (before this operator) and
-                        // `mfp_and_decode` (after this operator) do the
-                        // necessary filtering.
-                        for data in data {
-                            debug!(
-                                "{} {:.9} emitting data {:?}",
-                                name,
-                                data_id.to_string(),
-                                data
-                            );
-                            passthrough_output.give(&cap, data).await;
+                loop {
+                    // This only returns None when there are no more data left. Turn
+                    // it into an empty frontier progress so we can re-use the
+                    // shutdown code below.
+                    let event = passthrough_input
+                        .next()
+                        .await
+                        .unwrap_or_else(|| Event::Progress(Antichain::new()));
+                    match event {
+                        // NB: Ignore the data_cap because this input is
+                        // disconnected.
+                        Event::Data(_data_cap, data) => {
+                            // NB: Nothing to do here for `until` because the both
+                            // `shard_source` (before this operator) and
+                            // `mfp_and_decode` (after this operator) do the
+                            // necessary filtering.
+                            for data in data {
+                                debug!(
+                                    "{} {:.9} emitting data {:?}",
+                                    name,
+                                    data_id.to_string(),
+                                    data
+                                );
+                                passthrough_output.give(&cap, data).await;
+                            }
+                        }
+                        Event::Progress(progress) => {
+                            // If `until.less_equal(progress)`, it means that all
+                            // subsequent batches will contain only times greater or
+                            // equal to `until`, which means they can be dropped in
+                            // their entirety.
+                            //
+                            // Ideally this check would live in
+                            // `txns_progress_source`, but that turns out to be much
+                            // more invasive (requires replacing lots of `T`s with
+                            // `Antichain<T>`s). Given that we've been thinking
+                            // about reworking the operators, do the easy but more
+                            // wasteful thing for now.
+                            if PartialOrder::less_equal(&until, &progress) {
+                                debug!(
+                                    "{} progress {:?} has passed until {:?}",
+                                    name,
+                                    progress.elements(),
+                                    until.elements()
+                                );
+                                return;
+                            }
+                            // We reached the empty frontier! Shut down.
+                            let Some(input_progress_exclusive) = progress.as_option() else {
+                                return;
+                            };
+
+                            // Recall that any reads of the data shard are always
+                            // correct, so given that we've passed through any data
+                            // from the input, that means we're free to pass through
+                            // frontier updates too.
+                            if &output_progress_exclusive < input_progress_exclusive {
+                                output_progress_exclusive.clone_from(input_progress_exclusive);
+                                debug!(
+                                    "{} {:.9} downgrading cap to {:?}",
+                                    name,
+                                    data_id.to_string(),
+                                    output_progress_exclusive
+                                );
+                                cap.downgrade(&output_progress_exclusive);
+                            }
+                            if read_data_to.less_equal(&output_progress_exclusive) {
+                                break;
+                            }
                         }
                     }
-                    Event::Progress(progress) => {
-                        // If `until.less_equal(progress)`, it means that all
-                        // subsequent batches will contain only times greater or
-                        // equal to `until`, which means they can be dropped in
-                        // their entirety.
-                        //
-                        // Ideally this check would live in
-                        // `txns_progress_source`, but that turns out to be much
-                        // more invasive (requires replacing lots of `T`s with
-                        // `Antichain<T>`s). Given that we've been thinking
-                        // about reworking the operators, do the easy but more
-                        // wasteful thing for now.
-                        if PartialOrder::less_equal(&until, &progress) {
-                            debug!(
-                                "{} progress {:?} has passed until {:?}",
-                                name,
-                                progress.elements(),
-                                until.elements()
-                            );
-                            return;
-                        }
-                        // We reached the empty frontier! Shut down.
-                        let Some(input_progress_exclusive) = progress.as_option() else {
-                            return;
-                        };
+                }
 
-                        // Recall that any reads of the data shard are always
-                        // correct, so given that we've passed through any data
-                        // from the input, that means we're free to pass through
-                        // frontier updates too.
-                        if &output_progress_exclusive < input_progress_exclusive {
-                            output_progress_exclusive.clone_from(input_progress_exclusive);
-                            debug!(
+                // Any time we hit this point, we've emitted everything known to be
+                // physically written to the data shard. Query the txns shard to
+                // find out what to do next given our current progress.
+                loop {
+                    txns_cache.update_ge(&output_progress_exclusive).await;
+                    txns_cache.compact_to(&output_progress_exclusive);
+                    let data_listen_next = txns_cache
+                        .state
+                        .data_listen_next(&data_id, output_progress_exclusive.clone());
+                    debug!(
+                        "{} {:.9} data_listen_next at {:?}({:?}): {:?}",
+                        name,
+                        data_id.to_string(),
+                        read_data_to.elements(),
+                        output_progress_exclusive,
+                        data_listen_next,
+                    );
+                    match data_listen_next {
+                        // We've caught up to the txns upper and we have to wait for
+                        // it to advance before asking again.
+                        //
+                        // Note that we're asking again with the same input, but
+                        // once the cache is past progress_exclusive (as it will be
+                        // after this update_gt call), we're guaranteed to get an
+                        // answer.
+                        DataListenNext::WaitForTxnsProgress => {
+                            txns_cache.update_gt(&output_progress_exclusive).await;
+                            continue;
+                        }
+                        // The data shard got a write! Loop back above and pass
+                        // through data until we see it.
+                        DataListenNext::ReadDataTo(new_target) => {
+                            read_data_to = Antichain::from_elem(new_target);
+                            // TODO: This is a very strong hint that the data shard
+                            // is about to be written to. Because the data shard's
+                            // upper advances sparsely (on write, but not on passage
+                            // of time) which invalidates the "every 1s" assumption
+                            // of the default tuning, we've had to de-tune the
+                            // listen sleeps on the paired persist_source. Maybe we
+                            // use "one state" to wake it up in case pubsub doesn't
+                            // and remove the listen polling entirely? (NB: This
+                            // would have to happen in each worker so that it's
+                            // guaranteed to happen in each process.)
+                            break;
+                        }
+                        // We know there are no writes in
+                        // `[output_progress_exclusive, new_progress)`, so advance
+                        // our output frontier.
+                        DataListenNext::EmitLogicalProgress(new_progress) => {
+                            assert!(output_progress_exclusive < new_progress);
+                            output_progress_exclusive = new_progress;
+                            trace!(
                                 "{} {:.9} downgrading cap to {:?}",
                                 name,
                                 data_id.to_string(),
                                 output_progress_exclusive
                             );
                             cap.downgrade(&output_progress_exclusive);
+                            continue;
                         }
-                        if read_data_to.less_equal(&output_progress_exclusive) {
-                            break;
+                        DataListenNext::CompactedTo(since_ts) => {
+                            unreachable!(
+                                "internal logic error: {} unexpectedly compacted past {:?} to {:?}",
+                                data_id, output_progress_exclusive, since_ts
+                            )
                         }
                     }
                 }
             }
-
-            // Any time we hit this point, we've emitted everything known to be
-            // physically written to the data shard. Query the txns shard to
-            // find out what to do next given our current progress.
-            loop {
-                txns_cache.update_ge(&output_progress_exclusive).await;
-                txns_cache.compact_to(&output_progress_exclusive);
-                let data_listen_next = txns_cache
-                    .state
-                    .data_listen_next(&data_id, output_progress_exclusive.clone());
-                debug!(
-                    "{} {:.9} data_listen_next at {:?}({:?}): {:?}",
-                    name,
-                    data_id.to_string(),
-                    read_data_to.elements(),
-                    output_progress_exclusive,
-                    data_listen_next,
-                );
-                match data_listen_next {
-                    // We've caught up to the txns upper and we have to wait for
-                    // it to advance before asking again.
-                    //
-                    // Note that we're asking again with the same input, but
-                    // once the cache is past progress_exclusive (as it will be
-                    // after this update_gt call), we're guaranteed to get an
-                    // answer.
-                    DataListenNext::WaitForTxnsProgress => {
-                        txns_cache.update_gt(&output_progress_exclusive).await;
-                        continue;
-                    }
-                    // The data shard got a write! Loop back above and pass
-                    // through data until we see it.
-                    DataListenNext::ReadDataTo(new_target) => {
-                        read_data_to = Antichain::from_elem(new_target);
-                        // TODO: This is a very strong hint that the data shard
-                        // is about to be written to. Because the data shard's
-                        // upper advances sparsely (on write, but not on passage
-                        // of time) which invalidates the "every 1s" assumption
-                        // of the default tuning, we've had to de-tune the
-                        // listen sleeps on the paired persist_source. Maybe we
-                        // use "one state" to wake it up in case pubsub doesn't
-                        // and remove the listen polling entirely? (NB: This
-                        // would have to happen in each worker so that it's
-                        // guaranteed to happen in each process.)
-                        break;
-                    }
-                    // We know there are no writes in
-                    // `[output_progress_exclusive, new_progress)`, so advance
-                    // our output frontier.
-                    DataListenNext::EmitLogicalProgress(new_progress) => {
-                        assert!(output_progress_exclusive < new_progress);
-                        output_progress_exclusive = new_progress;
-                        trace!(
-                            "{} {:.9} downgrading cap to {:?}",
-                            name,
-                            data_id.to_string(),
-                            output_progress_exclusive
-                        );
-                        cap.downgrade(&output_progress_exclusive);
-                        continue;
-                    }
-                    DataListenNext::CompactedTo(since_ts) => {
-                        unreachable!(
-                            "internal logic error: {} unexpectedly compacted past {:?} to {:?}",
-                            data_id, output_progress_exclusive, since_ts
-                        )
-                    }
-                }
-            }
-        }
+        })
     });
     (passthrough_stream, shutdown_button.press_on_drop())
 }

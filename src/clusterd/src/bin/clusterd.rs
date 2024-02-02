@@ -46,6 +46,10 @@ const BUILD_INFO: BuildInfo = build_info!();
 
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 
+// gus3
+// after mono-fixing2
+// lalala again
+
 /// Independent cluster server for Materialize.
 #[derive(clap::Parser)]
 #[clap(name = "clusterd", version = VERSION.as_str())]

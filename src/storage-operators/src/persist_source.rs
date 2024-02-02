@@ -744,157 +744,159 @@ where
             }
         }
     });
-    let shutdown_button = builder.build(move |caps| async move {
-        // The output capability.
-        let mut cap_set = CapabilitySet::from_elem(caps.into_element());
+    let shutdown_button = builder.build(move |caps| {
+        Box::pin(async move {
+            // The output capability.
+            let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
-        // The frontier of our output. This matches the `CapabilitySet` above.
-        let mut output_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-        // The frontier of the `flow_control` input.
-        let mut flow_control_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+            // The frontier of our output. This matches the `CapabilitySet` above.
+            let mut output_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+            // The frontier of the `flow_control` input.
+            let mut flow_control_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
 
-        // Parts we have emitted, but have not yet retired (based on the `flow_control` edge).
-        let mut inflight_parts = Vec::new();
-        // Parts we have not yet emitted, but do participate in the `input_frontier`.
-        let mut pending_parts = std::collections::VecDeque::new();
+            // Parts we have emitted, but have not yet retired (based on the `flow_control` edge).
+            let mut inflight_parts = Vec::new();
+            // Parts we have not yet emitted, but do participate in the `input_frontier`.
+            let mut pending_parts = std::collections::VecDeque::new();
 
-        // Only one worker is responsible for distributing parts
-        if worker_index != chosen_worker {
-            trace!(
-                "We are not the chosen worker ({}), exiting...",
-                chosen_worker
-            );
-            return;
-        }
-        tokio::pin!(data_input);
-        'emitting_parts: loop {
-            // At the beginning of our main loop, we determine the total size of
-            // inflight parts.
-            let inflight_bytes: usize = inflight_parts.iter().map(|(_, size)| size).sum();
+            // Only one worker is responsible for distributing parts
+            if worker_index != chosen_worker {
+                trace!(
+                    "We are not the chosen worker ({}), exiting...",
+                    chosen_worker
+                );
+                return;
+            }
+            tokio::pin!(data_input);
+            'emitting_parts: loop {
+                // At the beginning of our main loop, we determine the total size of
+                // inflight parts.
+                let inflight_bytes: usize = inflight_parts.iter().map(|(_, size)| size).sum();
 
-            // There are 2 main cases where we can continue to emit parts:
-            // - The total emitted bytes is less than `flow_control_max_bytes`.
-            // - The output frontier is not beyond the `flow_control_frontier`
-            //
-            // SUBTLE: in the latter case, we may arbitrarily go into the backpressure `else`
-            // block, as we wait for progress tracking to keep the `flow_control` frontier
-            // up-to-date. This is tested in unit-tests.
-            if inflight_bytes < flow_control_max_bytes
-                || !PartialOrder::less_equal(&flow_control_frontier, &output_frontier)
-            {
-                let (time, part, next_frontier) =
-                    if let Some((time, part, next_frontier)) = pending_parts.pop_front() {
-                        (time, part, next_frontier)
-                    } else {
-                        match data_input.next().await {
-                            Some(Either::Right((time, part, frontier, next_frontier))) => {
-                                // Downgrade the output frontier to this part's time. This is useful
-                                // "close" timestamp's from previous parts, even if we don't yet
-                                // emit this part. Note that this is safe because `data_input` ensures
-                                // time-ordering.
-                                output_frontier = frontier;
-                                cap_set.downgrade(output_frontier.iter());
+                // There are 2 main cases where we can continue to emit parts:
+                // - The total emitted bytes is less than `flow_control_max_bytes`.
+                // - The output frontier is not beyond the `flow_control_frontier`
+                //
+                // SUBTLE: in the latter case, we may arbitrarily go into the backpressure `else`
+                // block, as we wait for progress tracking to keep the `flow_control` frontier
+                // up-to-date. This is tested in unit-tests.
+                if inflight_bytes < flow_control_max_bytes
+                    || !PartialOrder::less_equal(&flow_control_frontier, &output_frontier)
+                {
+                    let (time, part, next_frontier) =
+                        if let Some((time, part, next_frontier)) = pending_parts.pop_front() {
+                            (time, part, next_frontier)
+                        } else {
+                            match data_input.next().await {
+                                Some(Either::Right((time, part, frontier, next_frontier))) => {
+                                    // Downgrade the output frontier to this part's time. This is useful
+                                    // "close" timestamp's from previous parts, even if we don't yet
+                                    // emit this part. Note that this is safe because `data_input` ensures
+                                    // time-ordering.
+                                    output_frontier = frontier;
+                                    cap_set.downgrade(output_frontier.iter());
 
-                                // If the most recent value's time is _beyond_ the
-                                // `flow_control` frontier (which takes into account the `summary`), we
-                                // have emitted an entire `summary` worth of data, and can store this
-                                // value for later.
-                                if inflight_bytes >= flow_control_max_bytes
-                                    && !PartialOrder::less_than(
-                                        &output_frontier,
-                                        &flow_control_frontier,
-                                    )
-                                {
-                                    pending_parts.push_back((time, part, next_frontier));
+                                    // If the most recent value's time is _beyond_ the
+                                    // `flow_control` frontier (which takes into account the `summary`), we
+                                    // have emitted an entire `summary` worth of data, and can store this
+                                    // value for later.
+                                    if inflight_bytes >= flow_control_max_bytes
+                                        && !PartialOrder::less_than(
+                                            &output_frontier,
+                                            &flow_control_frontier,
+                                        )
+                                    {
+                                        pending_parts.push_back((time, part, next_frontier));
+                                        continue 'emitting_parts;
+                                    }
+                                    (time, part, next_frontier)
+                                }
+                                Some(Either::Left(prog)) => {
+                                    output_frontier = prog;
+                                    cap_set.downgrade(output_frontier.iter());
                                     continue 'emitting_parts;
                                 }
-                                (time, part, next_frontier)
-                            }
-                            Some(Either::Left(prog)) => {
-                                output_frontier = prog;
-                                cap_set.downgrade(output_frontier.iter());
-                                continue 'emitting_parts;
-                            }
-                            None => {
-                                if pending_parts.is_empty() {
-                                    break 'emitting_parts;
-                                } else {
-                                    continue 'emitting_parts;
+                                None => {
+                                    if pending_parts.is_empty() {
+                                        break 'emitting_parts;
+                                    } else {
+                                        continue 'emitting_parts;
+                                    }
                                 }
                             }
+                        };
+
+                    let byte_size = part.byte_size();
+                    // Store the value with the _frontier_ the `flow_control_input` must reach
+                    // to retire it. Note that if this `results_in` is `None`, then we
+                    // are at `T::MAX`, and give up on flow_control entirely.
+                    //
+                    // SUBTLE: If we stop storing these parts, we will likely never check the
+                    // `flow_control_input` ever again. This won't pile up data as that input
+                    // only has frontier updates. There may be spurious activations from it though.
+                    //
+                    // Also note that we don't attempt to handle overflowing the `u64` part counter.
+                    if let Some(emission_ts) = flow_control.summary.results_in(&time) {
+                        inflight_parts.push((emission_ts, byte_size));
+                    }
+
+                    // Emit the data at the given time, and update the frontier and capabilities
+                    // to just beyond the part.
+                    data_output.give(&cap_set.delayed(&time), part).await;
+
+                    if let Some(metrics) = &metrics {
+                        metrics.emitted_bytes.inc_by(u64::cast_from(byte_size))
+                    }
+
+                    output_frontier = next_frontier;
+                    cap_set.downgrade(output_frontier.iter())
+                } else {
+                    if let Some(metrics) = &metrics {
+                        metrics
+                            .last_backpressured_bytes
+                            .set(u64::cast_from(inflight_bytes))
+                    }
+                    let parts_count = inflight_parts.len();
+                    // We've exhausted our budget, listen for updates to the flow_control
+                    // input's frontier until we free up new budget. If we don't interact with
+                    // with this side of the if statement, because the stream has no data, we
+                    // don't cause unbounded buffering in timely.
+                    let new_flow_control_frontier = match flow_control_input.next().await {
+                        Some(Event::Progress(frontier)) => frontier,
+                        Some(Event::Data(_, _)) => {
+                            unreachable!("flow_control_input should not contain data")
                         }
+                        None => Antichain::new(),
                     };
 
-                let byte_size = part.byte_size();
-                // Store the value with the _frontier_ the `flow_control_input` must reach
-                // to retire it. Note that if this `results_in` is `None`, then we
-                // are at `T::MAX`, and give up on flow_control entirely.
-                //
-                // SUBTLE: If we stop storing these parts, we will likely never check the
-                // `flow_control_input` ever again. This won't pile up data as that input
-                // only has frontier updates. There may be spurious activations from it though.
-                //
-                // Also note that we don't attempt to handle overflowing the `u64` part counter.
-                if let Some(emission_ts) = flow_control.summary.results_in(&time) {
-                    inflight_parts.push((emission_ts, byte_size));
-                }
+                    // Update the `flow_control_frontier` if its advanced.
+                    flow_control_frontier = new_flow_control_frontier.clone();
 
-                // Emit the data at the given time, and update the frontier and capabilities
-                // to just beyond the part.
-                data_output.give(&cap_set.delayed(&time), part).await;
+                    // Retire parts that are processed downstream.
+                    let retired_parts = inflight_parts
+                        .drain_filter_swapping(|(ts, _size)| !flow_control_frontier.less_equal(ts));
+                    let (retired_size, retired_count): (usize, usize) =
+                        retired_parts.fold((0, 0), |(accum_size, accum_count), (_ts, size)| {
+                            (accum_size + size, accum_count + 1)
+                        });
+                    trace!(
+                        "returning {} parts with {} bytes, frontier: {:?}",
+                        retired_count,
+                        retired_size,
+                        flow_control_frontier,
+                    );
 
-                if let Some(metrics) = &metrics {
-                    metrics.emitted_bytes.inc_by(u64::cast_from(byte_size))
-                }
-
-                output_frontier = next_frontier;
-                cap_set.downgrade(output_frontier.iter())
-            } else {
-                if let Some(metrics) = &metrics {
-                    metrics
-                        .last_backpressured_bytes
-                        .set(u64::cast_from(inflight_bytes))
-                }
-                let parts_count = inflight_parts.len();
-                // We've exhausted our budget, listen for updates to the flow_control
-                // input's frontier until we free up new budget. If we don't interact with
-                // with this side of the if statement, because the stream has no data, we
-                // don't cause unbounded buffering in timely.
-                let new_flow_control_frontier = match flow_control_input.next().await {
-                    Some(Event::Progress(frontier)) => frontier,
-                    Some(Event::Data(_, _)) => {
-                        unreachable!("flow_control_input should not contain data")
+                    if let Some(metrics) = &metrics {
+                        metrics.retired_bytes.inc_by(u64::cast_from(retired_size))
                     }
-                    None => Antichain::new(),
-                };
 
-                // Update the `flow_control_frontier` if its advanced.
-                flow_control_frontier = new_flow_control_frontier.clone();
-
-                // Retire parts that are processed downstream.
-                let retired_parts = inflight_parts
-                    .drain_filter_swapping(|(ts, _size)| !flow_control_frontier.less_equal(ts));
-                let (retired_size, retired_count): (usize, usize) = retired_parts
-                    .fold((0, 0), |(accum_size, accum_count), (_ts, size)| {
-                        (accum_size + size, accum_count + 1)
-                    });
-                trace!(
-                    "returning {} parts with {} bytes, frontier: {:?}",
-                    retired_count,
-                    retired_size,
-                    flow_control_frontier,
-                );
-
-                if let Some(metrics) = &metrics {
-                    metrics.retired_bytes.inc_by(u64::cast_from(retired_size))
-                }
-
-                // Optionally emit some information for tests to examine.
-                if let Some(probe) = probe.as_ref() {
-                    let _ = probe.send((new_flow_control_frontier, parts_count, retired_count));
+                    // Optionally emit some information for tests to examine.
+                    if let Some(probe) = probe.as_ref() {
+                        let _ = probe.send((new_flow_control_frontier, parts_count, retired_count));
+                    }
                 }
             }
-        }
+        })
     });
     (data_stream, shutdown_button.press_on_drop())
 }
@@ -1327,26 +1329,28 @@ mod tests {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
         let (mut output_handle, output) = iterator.new_output::<Vec<Part>>();
 
-        iterator.build(|mut caps| async move {
-            let mut capability = Some(caps.pop().unwrap());
-            let mut last = None;
-            while let Some(element) = input.next() {
-                let time = element.0.clone();
-                let part = element.1;
-                last = Some((time, Subtime(0)));
-                output_handle
-                    .give(&capability.as_ref().unwrap().delayed(&last.unwrap()), part)
-                    .await;
-            }
-            if let Some(last) = last {
-                capability
-                    .as_mut()
-                    .unwrap()
-                    .downgrade(&(last.0 + 1, last.1));
-            }
+        iterator.build(|mut caps| {
+            Box::pin(async move {
+                let mut capability = Some(caps.pop().unwrap());
+                let mut last = None;
+                while let Some(element) = input.next() {
+                    let time = element.0.clone();
+                    let part = element.1;
+                    last = Some((time, Subtime(0)));
+                    output_handle
+                        .give(&capability.as_ref().unwrap().delayed(&last.unwrap()), part)
+                        .await;
+                }
+                if let Some(last) = last {
+                    capability
+                        .as_mut()
+                        .unwrap()
+                        .downgrade(&(last.0 + 1, last.1));
+                }
 
-            let _ = finalizer_rx.await;
-            capability.take();
+                let _ = finalizer_rx.await;
+                capability.take();
+            })
         });
 
         (output, finalizer_tx)
@@ -1365,11 +1369,13 @@ mod tests {
         let (output_handle, output) = consumer.new_output::<Vec<std::convert::Infallible>>();
         let mut input = consumer.new_input_for(input, Pipeline, &output_handle);
 
-        consumer.build(|_caps| async move {
-            while let Some(()) = rx.recv().await {
-                // Consume exactly one messages (unless the input is exhausted).
-                while let Some(Event::Progress(_)) = input.next().await {}
-            }
+        consumer.build(|_caps| {
+            Box::pin(async move {
+                while let Some(()) = rx.recv().await {
+                    // Consume exactly one messages (unless the input is exhausted).
+                    while let Some(Event::Progress(_)) = input.next().await {}
+                }
+            })
         });
         output.connect_loop(feedback);
 

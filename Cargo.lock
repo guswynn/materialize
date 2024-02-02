@@ -6136,6 +6136,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "differential-dataflow",
+ "futures",
  "futures-util",
  "mz-ore",
  "num-traits",

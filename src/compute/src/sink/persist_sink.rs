@@ -299,224 +299,227 @@ where
     let mut persist_feedback_input =
         mint_op.new_disconnected_input(persist_feedback_stream, Pipeline);
 
-    let shutdown_button = mint_op.build(move |capabilities| async move {
-        // Non-active workers should just pass the data through.
-        if !active_worker {
-            // The description output is entirely driven by the active worker, so we drop
-            // its capability here. The data-passthrough output just uses the data
-            // capabilities.
-            drop(capabilities);
-            while let Some(event) = desired_input.next().await {
-                match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
-                        data_output
-                            .give_container(&data_output_cap, &mut data)
-                            .await;
-                    }
-                    Event::Progress(_) => {}
-                }
-            }
-            return;
-        }
-
-        // The data-passthrough output will use the data capabilities, so we drop
-        // its capability here.
-        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
-        let mut cap_set = CapabilitySet::from_elem(desc_cap);
-
-        // TODO(aljoscha): We need to figure out what to do with error
-        // results from these calls.
-        let persist_client = persist_clients
-            .open(persist_location)
-            .await
-            .expect("could not open persist client");
-
-        let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff>(
-                shard_id,
-                Arc::new(target_relation_desc),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: sink_id.to_string(),
-                    handle_purpose: format!(
-                        "compute::persist_sink::mint_batch_descriptions {}",
-                        sink_id
-                    ),
-                },
-            )
-            .await
-            .expect("could not open persist shard");
-
-        let mut current_persist_frontier = write.upper().clone();
-
-        // Advance the persist shard's upper to at least our write lower
-        // bound.
-        if PartialOrder::less_than(&current_persist_frontier, &write_lower_bound) {
-            if sink_id.is_user() {
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        advancing to write_lower_bound: {:?}",
-                    write_lower_bound
-                );
-            }
-
-            let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
-            // It's fine if we don't succeed here. This just means that
-            // someone else already advanced the persist frontier further,
-            // which is great!
-            let res = write
-                .append(
-                    empty_updates,
-                    current_persist_frontier.clone(),
-                    write_lower_bound.clone(),
-                )
-                .await
-                .expect("invalid usage");
-
-            if sink_id.is_user() {
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        advancing to write_lower_bound result: {:?}",
-                    res
-                );
-            }
-
-            current_persist_frontier.clone_from(&write_lower_bound);
-        }
-
-        // The current input frontiers.
-        let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-        let mut persist_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
-
-        // The persist_frontier as it was when we last ran through our minting logic.
-        // SUBTLE: As described below, we only mint new batch descriptions
-        // when the persist frontier moves. We therefore have to encode this
-        // one as an `Option<Antichain<T>>` where the change from `None` to
-        // `Some([minimum])` is also a change in the frontier. If we didn't
-        // do this, we would be stuck at `[minimum]`.
-        let mut emitted_persist_frontier: Option<Antichain<_>> = None;
-
-        loop {
-            tokio::select! {
-                Some(event) = desired_input.next() => {
+    let shutdown_button = mint_op.build(move |capabilities| {
+        Box::pin(async move {
+            // Non-active workers should just pass the data through.
+            if !active_worker {
+                // The description output is entirely driven by the active worker, so we drop
+                // its capability here. The data-passthrough output just uses the data
+                // capabilities.
+                drop(capabilities);
+                while let Some(event) = desired_input.next().await {
                     match event {
                         Event::Data([_output_cap, data_output_cap], mut data) => {
-                            // Just passthrough the data.
-                            data_output.give_container(&data_output_cap, &mut data).await;
-                            continue;
+                            data_output
+                                .give_container(&data_output_cap, &mut data)
+                                .await;
                         }
-                        Event::Progress(frontier) => {
-                            desired_frontier = frontier;
-                        }
+                        Event::Progress(_) => {}
                     }
                 }
-                Some(event) = persist_feedback_input.next() => {
-                    match event {
-                        Event::Data(_cap, _data) => {
-                            // This input produces no data.
-                            continue;
-                        }
-                        Event::Progress(frontier) => {
-                            persist_frontier = frontier;
-                        }
-                    }
-                }
-                else => {
-                    // All inputs are exhausted, so we can shut down.
-                    return;
-                }
-            };
+                return;
+            }
 
-            if PartialOrder::less_than(&*shared_frontier.borrow(), &persist_frontier) {
+            // The data-passthrough output will use the data capabilities, so we drop
+            // its capability here.
+            let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+            let mut cap_set = CapabilitySet::from_elem(desc_cap);
+
+            // TODO(aljoscha): We need to figure out what to do with error
+            // results from these calls.
+            let persist_client = persist_clients
+                .open(persist_location)
+                .await
+                .expect("could not open persist client");
+
+            let mut write = persist_client
+                .open_writer::<SourceData, (), Timestamp, Diff>(
+                    shard_id,
+                    Arc::new(target_relation_desc),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: sink_id.to_string(),
+                        handle_purpose: format!(
+                            "compute::persist_sink::mint_batch_descriptions {}",
+                            sink_id
+                        ),
+                    },
+                )
+                .await
+                .expect("could not open persist shard");
+
+            let mut current_persist_frontier = write.upper().clone();
+
+            // Advance the persist shard's upper to at least our write lower
+            // bound.
+            if PartialOrder::less_than(&current_persist_frontier, &write_lower_bound) {
                 if sink_id.is_user() {
                     trace!(
                         "persist_sink {sink_id}/{shard_id}: \
-                            updating shared_frontier to {:?}",
-                        persist_frontier,
+                        advancing to write_lower_bound: {:?}",
+                        write_lower_bound
                     );
                 }
 
-                // Share that we have finished processing all times less than the persist frontier.
-                // Advancing the sink upper communicates to the storage controller that it is
-                // permitted to compact our target storage collection up to the new upper. So we
-                // must be careful to not advance the sink upper beyond our read frontier.
-                shared_frontier.borrow_mut().clear();
-                shared_frontier
-                    .borrow_mut()
-                    .extend(persist_frontier.iter().cloned());
-            }
+                let empty_updates: &[((SourceData, ()), Timestamp, Diff)] = &[];
+                // It's fine if we don't succeed here. This just means that
+                // someone else already advanced the persist frontier further,
+                // which is great!
+                let res = write
+                    .append(
+                        empty_updates,
+                        current_persist_frontier.clone(),
+                        write_lower_bound.clone(),
+                    )
+                    .await
+                    .expect("invalid usage");
 
-            // We only mint new batch desriptions when:
-            //  1. the desired frontier is past the persist frontier
-            //  2. the persist frontier has moved since we last emitted a
-            //     batch
-            //
-            // That last point is _subtle_: If we emitted new batch
-            // descriptions whenever the desired frontier moves but the
-            // persist frontier doesn't move, we would mint overlapping
-            // batch descriptions, which would lead to errors when trying to
-            // appent batches based on them.
-            //
-            // We never use the same lower frontier twice.
-            // We only emit new batches when the persist frontier moves.
-            // A batch description that we mint for a given `lower` will
-            // either succeed in being appended, in which case the
-            // persist frontier moves. Or it will fail because the
-            // persist frontier got moved by someone else, in which case
-            // we also won't mint a new batch description for the same
-            // frontier.
-            if PartialOrder::less_than(&persist_frontier, &desired_frontier)
-                && (emitted_persist_frontier.is_none()
-                    || PartialOrder::less_than(
-                        emitted_persist_frontier.as_ref().unwrap(),
-                        &persist_frontier,
-                    ))
-            {
-                let batch_description = (persist_frontier.to_owned(), desired_frontier.to_owned());
-
-                let lower = batch_description.0.first().unwrap();
-                let batch_ts = batch_description.0.first().unwrap().clone();
-
-                let cap = cap_set
-                    .try_delayed(&batch_ts)
-                    .ok_or_else(|| {
-                        format!(
-                            "minter cannot delay {:?} to {:?}. \
-                                Likely because we already emitted a \
-                                batch description and delayed.",
-                            cap_set, lower
-                        )
-                    })
-                    .unwrap();
-
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        new batch_description: {:?}",
-                    batch_description
-                );
-
-                output.give(&cap, batch_description).await;
-
-                // WIP: We downgrade our capability so that downstream
-                // operators (writer and appender) can know when all the
-                // writers have had a chance to write updates to persist for
-                // a given batch. Just stepping forward feels a bit icky,
-                // though.
-                let new_batch_frontier = Antichain::from_elem(batch_ts.step_forward());
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        downgrading to {:?}",
-                    new_batch_frontier
-                );
-                let res = cap_set.try_downgrade(new_batch_frontier.iter());
-                match res {
-                    Ok(_) => (),
-                    Err(e) => panic!("in minter: {:?}", e),
+                if sink_id.is_user() {
+                    trace!(
+                        "persist_sink {sink_id}/{shard_id}: \
+                        advancing to write_lower_bound result: {:?}",
+                        res
+                    );
                 }
 
-                emitted_persist_frontier.replace(persist_frontier.clone());
+                current_persist_frontier.clone_from(&write_lower_bound);
             }
-        }
+
+            // The current input frontiers.
+            let mut desired_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+            let mut persist_frontier = Antichain::from_elem(TimelyTimestamp::minimum());
+
+            // The persist_frontier as it was when we last ran through our minting logic.
+            // SUBTLE: As described below, we only mint new batch descriptions
+            // when the persist frontier moves. We therefore have to encode this
+            // one as an `Option<Antichain<T>>` where the change from `None` to
+            // `Some([minimum])` is also a change in the frontier. If we didn't
+            // do this, we would be stuck at `[minimum]`.
+            let mut emitted_persist_frontier: Option<Antichain<_>> = None;
+
+            loop {
+                tokio::select! {
+                    Some(event) = desired_input.next() => {
+                        match event {
+                            Event::Data([_output_cap, data_output_cap], mut data) => {
+                                // Just passthrough the data.
+                                data_output.give_container(&data_output_cap, &mut data).await;
+                                continue;
+                            }
+                            Event::Progress(frontier) => {
+                                desired_frontier = frontier;
+                            }
+                        }
+                    }
+                    Some(event) = persist_feedback_input.next() => {
+                        match event {
+                            Event::Data(_cap, _data) => {
+                                // This input produces no data.
+                                continue;
+                            }
+                            Event::Progress(frontier) => {
+                                persist_frontier = frontier;
+                            }
+                        }
+                    }
+                    else => {
+                        // All inputs are exhausted, so we can shut down.
+                        return;
+                    }
+                };
+
+                if PartialOrder::less_than(&*shared_frontier.borrow(), &persist_frontier) {
+                    if sink_id.is_user() {
+                        trace!(
+                            "persist_sink {sink_id}/{shard_id}: \
+                            updating shared_frontier to {:?}",
+                            persist_frontier,
+                        );
+                    }
+
+                    // Share that we have finished processing all times less than the persist frontier.
+                    // Advancing the sink upper communicates to the storage controller that it is
+                    // permitted to compact our target storage collection up to the new upper. So we
+                    // must be careful to not advance the sink upper beyond our read frontier.
+                    shared_frontier.borrow_mut().clear();
+                    shared_frontier
+                        .borrow_mut()
+                        .extend(persist_frontier.iter().cloned());
+                }
+
+                // We only mint new batch desriptions when:
+                //  1. the desired frontier is past the persist frontier
+                //  2. the persist frontier has moved since we last emitted a
+                //     batch
+                //
+                // That last point is _subtle_: If we emitted new batch
+                // descriptions whenever the desired frontier moves but the
+                // persist frontier doesn't move, we would mint overlapping
+                // batch descriptions, which would lead to errors when trying to
+                // appent batches based on them.
+                //
+                // We never use the same lower frontier twice.
+                // We only emit new batches when the persist frontier moves.
+                // A batch description that we mint for a given `lower` will
+                // either succeed in being appended, in which case the
+                // persist frontier moves. Or it will fail because the
+                // persist frontier got moved by someone else, in which case
+                // we also won't mint a new batch description for the same
+                // frontier.
+                if PartialOrder::less_than(&persist_frontier, &desired_frontier)
+                    && (emitted_persist_frontier.is_none()
+                        || PartialOrder::less_than(
+                            emitted_persist_frontier.as_ref().unwrap(),
+                            &persist_frontier,
+                        ))
+                {
+                    let batch_description =
+                        (persist_frontier.to_owned(), desired_frontier.to_owned());
+
+                    let lower = batch_description.0.first().unwrap();
+                    let batch_ts = batch_description.0.first().unwrap().clone();
+
+                    let cap = cap_set
+                        .try_delayed(&batch_ts)
+                        .ok_or_else(|| {
+                            format!(
+                                "minter cannot delay {:?} to {:?}. \
+                                Likely because we already emitted a \
+                                batch description and delayed.",
+                                cap_set, lower
+                            )
+                        })
+                        .unwrap();
+
+                    trace!(
+                        "persist_sink {sink_id}/{shard_id}: \
+                        new batch_description: {:?}",
+                        batch_description
+                    );
+
+                    output.give(&cap, batch_description).await;
+
+                    // WIP: We downgrade our capability so that downstream
+                    // operators (writer and appender) can know when all the
+                    // writers have had a chance to write updates to persist for
+                    // a given batch. Just stepping forward feels a bit icky,
+                    // though.
+                    let new_batch_frontier = Antichain::from_elem(batch_ts.step_forward());
+                    trace!(
+                        "persist_sink {sink_id}/{shard_id}: \
+                        downgrading to {:?}",
+                        new_batch_frontier
+                    );
+                    let res = cap_set.try_downgrade(new_batch_frontier.iter());
+                    match res {
+                        Ok(_) => (),
+                        Err(e) => panic!("in minter: {:?}", e),
+                    }
+
+                    emitted_persist_frontier.replace(persist_frontier.clone());
+                }
+            }
+        })
     });
 
     if sink_id.is_user() {
@@ -615,7 +618,7 @@ where
     // It attempts to write out updates, starting from the current's upper frontier, that
     // will cause the changes of desired to be committed to persist.
 
-    let shutdown_button = write_op.build(move |_capabilities| async move {
+    let shutdown_button = write_op.build(move |_capabilities| Box::pin(async move {
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
@@ -897,7 +900,7 @@ where
                 );
             }
         }
-    });
+    }));
 
     if sink_id.is_user() {
         output_stream.inspect(|d| trace!("batch: {:?}", d));
@@ -959,7 +962,7 @@ where
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let shutdown_button = append_op.build(move |mut capabilities| async move {
+    let shutdown_button = append_op.build(move |mut capabilities| Box::pin(async move {
         if !active_worker {
             return;
         }
@@ -1203,7 +1206,7 @@ where
                 }
             }
         }
-    });
+    }));
 
     let token = Rc::new(shutdown_button.press_on_drop());
     (output_stream, token)

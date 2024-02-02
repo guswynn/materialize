@@ -158,7 +158,7 @@ pub fn rehydration_finished<G, T>(
     let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
     let mut input = builder.new_disconnected_input(input, Pipeline);
 
-    builder.build(move |_capabilities| async move {
+    builder.build(move |_capabilities| Box::pin(async move {
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
         // Ensure this operator finishes if the resume upper is `[0]`
         while !PartialOrder::less_equal(&resume_upper, &input_upper) {
@@ -173,7 +173,7 @@ pub fn rehydration_finished<G, T>(
             "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
         );
         drop(token);
-    });
+    }));
 }
 
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
@@ -417,7 +417,7 @@ where
     );
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
-    let shutdown_button = builder.build(move |caps| async move {
+    let shutdown_button = builder.build(move |caps| Box::pin(async move {
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         let mut state = UpsertState::new(
@@ -716,7 +716,7 @@ where
                 }
             }
         }
-    });
+    }));
 
     (
         output.as_collection().map(|result| match result {

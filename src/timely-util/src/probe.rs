@@ -165,21 +165,23 @@ where
     let mut builder = AsyncOperatorBuilder::new(name, scope);
     let (_output, output_stream) = builder.new_output();
 
-    builder.build(move |capabilities| async move {
-        let mut cap_set = CapabilitySet::from(capabilities);
-        let mut frontier = Antichain::from_elem(T::minimum());
+    builder.build(move |capabilities| {
+        Box::pin(async move {
+            let mut cap_set = CapabilitySet::from(capabilities);
+            let mut frontier = Antichain::from_elem(T::minimum());
 
-        let mut downgrade_capability = |f: AntichainRef<T>| {
-            if PartialOrder::less_than(&frontier.borrow(), &f) {
-                frontier = f.to_owned();
-                cap_set.downgrade(&f);
+            let mut downgrade_capability = |f: AntichainRef<T>| {
+                if PartialOrder::less_than(&frontier.borrow(), &f) {
+                    frontier = f.to_owned();
+                    cap_set.downgrade(&f);
+                }
+                !frontier.is_empty()
+            };
+
+            while handle.with_frontier(&mut downgrade_capability) {
+                handle.progressed().await;
             }
-            !frontier.is_empty()
-        };
-
-        while handle.with_frontier(&mut downgrade_capability) {
-            handle.progressed().await;
-        }
+        })
     });
 
     output_stream

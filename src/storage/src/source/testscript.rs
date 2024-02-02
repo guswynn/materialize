@@ -61,37 +61,39 @@ impl SourceRender for TestScriptSourceConnection {
 
         let (mut data_output, stream) = builder.new_output();
 
-        let button = builder.build(move |caps| async move {
-            let mut cap = caps.into_element();
+        let button = builder.build(move |caps| {
+            Box::pin(async move {
+                let mut cap = caps.into_element();
 
-            let commands: Vec<ScriptCommand> =
-                serde_json::from_str(&self.desc_json).expect("Invalid command description");
+                let commands: Vec<ScriptCommand> =
+                    serde_json::from_str(&self.desc_json).expect("Invalid command description");
 
-            for command in commands {
-                match command {
-                    ScriptCommand::Emit { key, value, offset } => {
-                        // For now we only support `Finalized` messages
-                        let key = match key {
-                            Some(key) => Row::pack([Datum::Bytes(key.as_bytes())]),
-                            None => Row::pack([Datum::Null]),
-                        };
-                        let msg = Ok(SourceMessage {
-                            key,
-                            value: Row::pack([Datum::Bytes(value.as_bytes())]),
-                            metadata: Row::default(),
-                        });
-                        let ts = MzOffset::from(offset);
+                for command in commands {
+                    match command {
+                        ScriptCommand::Emit { key, value, offset } => {
+                            // For now we only support `Finalized` messages
+                            let key = match key {
+                                Some(key) => Row::pack([Datum::Bytes(key.as_bytes())]),
+                                None => Row::pack([Datum::Null]),
+                            };
+                            let msg = Ok(SourceMessage {
+                                key,
+                                value: Row::pack([Datum::Bytes(value.as_bytes())]),
+                                metadata: Row::default(),
+                            });
+                            let ts = MzOffset::from(offset);
 
-                        // For now, we only support single-output, single partition, so output
-                        // to the 0th output.
-                        data_output.give(&cap.delayed(&ts), ((0, msg), ts, 1)).await;
-                        cap.downgrade(&(ts + 1));
+                            // For now, we only support single-output, single partition, so output
+                            // to the 0th output.
+                            data_output.give(&cap.delayed(&ts), ((0, msg), ts, 1)).await;
+                            cap.downgrade(&(ts + 1));
+                        }
+                        ScriptCommand::Terminate => return,
                     }
-                    ScriptCommand::Terminate => return,
                 }
-            }
-            // Keep the source alive if we didn't get an explicit Terminate command
-            futures::future::pending::<()>().await;
+                // Keep the source alive if we didn't get an explicit Terminate command
+                futures::future::pending::<()>().await;
+            })
         });
 
         let status = [HealthStatusMessage {

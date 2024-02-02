@@ -360,145 +360,147 @@ where
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
-    let button = health_op.build(move |mut _capabilities| async move {
-        let mut health_states: BTreeMap<_, _> = configs
-            .into_iter()
-            .map(|(output_idx, id)| (output_idx, HealthState::new(id, worker_count)))
-            .collect();
+    let button = health_op.build(move |mut _capabilities| {
+        Box::pin(async move {
+            let mut health_states: BTreeMap<_, _> = configs
+                .into_iter()
+                .map(|(output_idx, id)| (output_idx, HealthState::new(id, worker_count)))
+                .collect();
 
-        // Write the initial starting state to the status shard for all managed objects
-        if is_active_worker {
-            for state in health_states.values_mut() {
-                if mark_starting.contains(&state.id) {
-                    let status = OverallStatus::Starting;
-                    let timestamp = mz_ore::now::to_datetime(now());
-                    health_operator_impl
-                        .record_new_status(
-                            state.id,
-                            timestamp,
-                            status.name(),
-                            status.error(),
-                            status.hints().unwrap_or(&BTreeSet::new()),
-                            status.errors().unwrap_or(&BTreeMap::new()),
-                            write_namespaced_map,
-                        )
-                        .await;
-
-                    state.last_reported_status = Some(status);
-                }
-            }
-        }
-
-        let mut outputs_seen = BTreeMap::<usize, BTreeSet<_>>::new();
-        while let Some(event) = input.next().await {
-            if let AsyncEvent::Data(_cap, rows) = event {
-                for (worker_id, message) in rows {
-                    let HealthStatusMessage {
-                        index: output_index,
-                        namespace: ns,
-                        update: health_event,
-                    } = message;
-                    let HealthState {
-                        id,
-                        healths,
-                        halt_with,
-                        ..
-                    } = match health_states.get_mut(&output_index) {
-                        Some(health) => health,
-                        // This is a health status update for a sub-object_type that we did not request to
-                        // be generated, which means it doesn't have a GlobalId and should not be
-                        // propagated to the shard.
-                        None => continue,
-                    };
-
-                    // Its important to track `new_round` per-namespace, so namespaces are reasoned
-                    // about in `merge_update` independently.
-                    let new_round = outputs_seen
-                        .entry(output_index)
-                        .or_insert_with(BTreeSet::new)
-                        .insert(ns.clone());
-
-                    if !is_active_worker {
-                        error!(
-                            "Health messages for {object_type} {id} passed to \
-                              an unexpected worker id: {healthcheck_worker_id}"
-                        )
-                    }
-
-                    if health_event.should_halt() {
-                        *halt_with = Some((ns.clone(), health_event.clone()));
-                    }
-
-                    healths.merge_update(worker_id, ns, health_event, !new_round);
-                }
-
-                let mut halt_with_outer = None;
-
-                while let Some((output_index, _)) = outputs_seen.pop_first() {
-                    let HealthState {
-                        id,
-                        healths,
-                        last_reported_status,
-                        halt_with,
-                    } = health_states
-                        .get_mut(&output_index)
-                        .expect("known to exist");
-
-                    let new_status = healths.decide_status();
-
-                    if Some(&new_status) != last_reported_status.as_ref() {
-                        info!(
-                            "Health transition for {object_type} {id}: \
-                                  {last_reported_status:?} -> {:?}",
-                            Some(&new_status)
-                        );
-
+            // Write the initial starting state to the status shard for all managed objects
+            if is_active_worker {
+                for state in health_states.values_mut() {
+                    if mark_starting.contains(&state.id) {
+                        let status = OverallStatus::Starting;
                         let timestamp = mz_ore::now::to_datetime(now());
                         health_operator_impl
                             .record_new_status(
-                                *id,
+                                state.id,
                                 timestamp,
-                                new_status.name(),
-                                new_status.error(),
-                                new_status.hints().unwrap_or(&BTreeSet::new()),
-                                new_status.errors().unwrap_or(&BTreeMap::new()),
+                                status.name(),
+                                status.error(),
+                                status.hints().unwrap_or(&BTreeSet::new()),
+                                status.errors().unwrap_or(&BTreeMap::new()),
                                 write_namespaced_map,
                             )
                             .await;
 
-                        *last_reported_status = Some(new_status.clone());
+                        state.last_reported_status = Some(status);
                     }
-
-                    // Set halt with if None.
-                    if halt_with_outer.is_none() && halt_with.is_some() {
-                        halt_with_outer = Some((*id, halt_with.clone()));
-                    }
-                }
-
-                // TODO(aljoscha): Instead of threading through the
-                // `should_halt` bit, we can give an internal command sender
-                // directly to the places where `should_halt = true` originates.
-                // We should definitely do that, but this is okay for a PoC.
-                if let Some((id, halt_with)) = halt_with_outer {
-                    mz_ore::soft_assert_or_log!(
-                        id == halting_id,
-                        "sub{object_type}s should not produce \
-                        halting errors, however {:?} halted while primary \
-                                            {object_type} is {:?}",
-                        id,
-                        halting_id
-                    );
-
-                    info!(
-                        "Broadcasting suspend-and-restart \
-                        command because of {:?} after {:?} delay",
-                        halt_with, SUSPEND_AND_RESTART_DELAY
-                    );
-                    tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
-                    health_operator_impl.send_halt(id, halt_with).await;
                 }
             }
-        }
+
+            let mut outputs_seen = BTreeMap::<usize, BTreeSet<_>>::new();
+            while let Some(event) = input.next().await {
+                if let AsyncEvent::Data(_cap, rows) = event {
+                    for (worker_id, message) in rows {
+                        let HealthStatusMessage {
+                            index: output_index,
+                            namespace: ns,
+                            update: health_event,
+                        } = message;
+                        let HealthState {
+                            id,
+                            healths,
+                            halt_with,
+                            ..
+                        } = match health_states.get_mut(&output_index) {
+                            Some(health) => health,
+                            // This is a health status update for a sub-object_type that we did not request to
+                            // be generated, which means it doesn't have a GlobalId and should not be
+                            // propagated to the shard.
+                            None => continue,
+                        };
+
+                        // Its important to track `new_round` per-namespace, so namespaces are reasoned
+                        // about in `merge_update` independently.
+                        let new_round = outputs_seen
+                            .entry(output_index)
+                            .or_insert_with(BTreeSet::new)
+                            .insert(ns.clone());
+
+                        if !is_active_worker {
+                            error!(
+                                "Health messages for {object_type} {id} passed to \
+                              an unexpected worker id: {healthcheck_worker_id}"
+                            )
+                        }
+
+                        if health_event.should_halt() {
+                            *halt_with = Some((ns.clone(), health_event.clone()));
+                        }
+
+                        healths.merge_update(worker_id, ns, health_event, !new_round);
+                    }
+
+                    let mut halt_with_outer = None;
+
+                    while let Some((output_index, _)) = outputs_seen.pop_first() {
+                        let HealthState {
+                            id,
+                            healths,
+                            last_reported_status,
+                            halt_with,
+                        } = health_states
+                            .get_mut(&output_index)
+                            .expect("known to exist");
+
+                        let new_status = healths.decide_status();
+
+                        if Some(&new_status) != last_reported_status.as_ref() {
+                            info!(
+                                "Health transition for {object_type} {id}: \
+                                  {last_reported_status:?} -> {:?}",
+                                Some(&new_status)
+                            );
+
+                            let timestamp = mz_ore::now::to_datetime(now());
+                            health_operator_impl
+                                .record_new_status(
+                                    *id,
+                                    timestamp,
+                                    new_status.name(),
+                                    new_status.error(),
+                                    new_status.hints().unwrap_or(&BTreeSet::new()),
+                                    new_status.errors().unwrap_or(&BTreeMap::new()),
+                                    write_namespaced_map,
+                                )
+                                .await;
+
+                            *last_reported_status = Some(new_status.clone());
+                        }
+
+                        // Set halt with if None.
+                        if halt_with_outer.is_none() && halt_with.is_some() {
+                            halt_with_outer = Some((*id, halt_with.clone()));
+                        }
+                    }
+
+                    // TODO(aljoscha): Instead of threading through the
+                    // `should_halt` bit, we can give an internal command sender
+                    // directly to the places where `should_halt = true` originates.
+                    // We should definitely do that, but this is okay for a PoC.
+                    if let Some((id, halt_with)) = halt_with_outer {
+                        mz_ore::soft_assert_or_log!(
+                            id == halting_id,
+                            "sub{object_type}s should not produce \
+                        halting errors, however {:?} halted while primary \
+                                            {object_type} is {:?}",
+                            id,
+                            halting_id
+                        );
+
+                        info!(
+                            "Broadcasting suspend-and-restart \
+                        command because of {:?} after {:?} delay",
+                            halt_with, SUSPEND_AND_RESTART_DELAY
+                        );
+                        tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
+                        health_operator_impl.send_halt(id, halt_with).await;
+                    }
+                }
+            }
+        })
     });
 
     button.press_on_drop()

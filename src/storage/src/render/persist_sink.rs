@@ -418,132 +418,134 @@ where
     let mut desired_input =
         mint_op.new_input_for_many(&desired_collection.inner, Pipeline, [&output, &data_output]);
 
-    let shutdown_button = mint_op.build(move |capabilities| async move {
-        // Non-active workers should just pass the data through.
-        if !active_worker {
-            // The description output is entirely driven by the active worker, so we drop
-            // its capability here. The data-passthrough output just uses the data
-            // capabilities.
-            drop(capabilities);
-            while let Some(event) = desired_input.next().await {
-                match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
-                        data_output
-                            .give_container(&data_output_cap, &mut data)
-                            .await;
-                    }
-                    Event::Progress(_) => {}
-                }
-            }
-            return;
-        }
-        // The data-passthrough output should will use the data capabilities, so we drop
-        // its capability here.
-        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
-        let mut cap_set = CapabilitySet::from_elem(desc_cap);
-
-        // Initialize this operators's `upper` to the `upper` of the persist shard we are writing
-        // to. Data from the source not beyond this time will be dropped, as it has already
-        // been persisted.
-        // In the future, sources will avoid passing through data not beyond this upper
-        let mut current_upper = {
-            // TODO(aljoscha): We need to figure out what to do with error
-            // results from these calls.
-            let persist_client = persist_clients
-                .open(persist_location)
-                .await
-                .expect("could not open persist client");
-
-            let mut write = persist_client
-                .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
-                    shard_id,
-                    Arc::new(target_relation_desc),
-                    Arc::new(UnitSchema),
-                    Diagnostics {
-                        shard_name: collection_id.to_string(),
-                        handle_purpose: format!(
-                            "storage::persist_sink::mint_batch_descriptions {}",
-                            collection_id
-                        ),
-                    },
-                )
-                .await
-                .expect("could not open persist shard");
-
-            // TODO: this sink currently cannot tolerate a stale upper... which is bad because the
-            // upper can become stale as soon as it is read. (For example, if another concurrent
-            // instance of the sink has updated it.) Fetching a recent upper helps to mitigate this,
-            // but ideally we would just skip ahead if we discover that our upper is stale.
-            let upper = write.fetch_recent_upper().await.clone();
-            // explicitly expire the once-used write handle.
-            write.expire().await;
-            upper
-        };
-
-        // The current input frontiers.
-        let mut desired_frontier;
-
-        loop {
-            if let Some(event) = desired_input.next().await {
-                match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
-                        // Just passthrough the data.
-                        data_output
-                            .give_container(&data_output_cap, &mut data)
-                            .await;
-                        continue;
-                    }
-                    Event::Progress(frontier) => {
-                        desired_frontier = frontier;
+    let shutdown_button = mint_op.build(move |capabilities| {
+        Box::pin(async move {
+            // Non-active workers should just pass the data through.
+            if !active_worker {
+                // The description output is entirely driven by the active worker, so we drop
+                // its capability here. The data-passthrough output just uses the data
+                // capabilities.
+                drop(capabilities);
+                while let Some(event) = desired_input.next().await {
+                    match event {
+                        Event::Data([_output_cap, data_output_cap], mut data) => {
+                            data_output
+                                .give_container(&data_output_cap, &mut data)
+                                .await;
+                        }
+                        Event::Progress(_) => {}
                     }
                 }
-            } else {
-                // Input is exhausted, so we can shut down.
                 return;
+            }
+            // The data-passthrough output should will use the data capabilities, so we drop
+            // its capability here.
+            let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+            let mut cap_set = CapabilitySet::from_elem(desc_cap);
+
+            // Initialize this operators's `upper` to the `upper` of the persist shard we are writing
+            // to. Data from the source not beyond this time will be dropped, as it has already
+            // been persisted.
+            // In the future, sources will avoid passing through data not beyond this upper
+            let mut current_upper = {
+                // TODO(aljoscha): We need to figure out what to do with error
+                // results from these calls.
+                let persist_client = persist_clients
+                    .open(persist_location)
+                    .await
+                    .expect("could not open persist client");
+
+                let mut write = persist_client
+                    .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
+                        shard_id,
+                        Arc::new(target_relation_desc),
+                        Arc::new(UnitSchema),
+                        Diagnostics {
+                            shard_name: collection_id.to_string(),
+                            handle_purpose: format!(
+                                "storage::persist_sink::mint_batch_descriptions {}",
+                                collection_id
+                            ),
+                        },
+                    )
+                    .await
+                    .expect("could not open persist shard");
+
+                // TODO: this sink currently cannot tolerate a stale upper... which is bad because the
+                // upper can become stale as soon as it is read. (For example, if another concurrent
+                // instance of the sink has updated it.) Fetching a recent upper helps to mitigate this,
+                // but ideally we would just skip ahead if we discover that our upper is stale.
+                let upper = write.fetch_recent_upper().await.clone();
+                // explicitly expire the once-used write handle.
+                write.expire().await;
+                upper
             };
 
-            // If the new frontier for the data input has progressed, produce a batch description.
-            if PartialOrder::less_than(&current_upper, &desired_frontier) {
-                // The maximal description range we can produce.
-                let batch_description = (current_upper.to_owned(), desired_frontier.to_owned());
+            // The current input frontiers.
+            let mut desired_frontier;
 
-                let lower = batch_description.0.as_option().copied().unwrap();
+            loop {
+                if let Some(event) = desired_input.next().await {
+                    match event {
+                        Event::Data([_output_cap, data_output_cap], mut data) => {
+                            // Just passthrough the data.
+                            data_output
+                                .give_container(&data_output_cap, &mut data)
+                                .await;
+                            continue;
+                        }
+                        Event::Progress(frontier) => {
+                            desired_frontier = frontier;
+                        }
+                    }
+                } else {
+                    // Input is exhausted, so we can shut down.
+                    return;
+                };
 
-                let cap = cap_set
-                    .try_delayed(&lower)
-                    .ok_or_else(|| {
-                        format!(
-                            "minter cannot delay {:?} to {:?}. \
+                // If the new frontier for the data input has progressed, produce a batch description.
+                if PartialOrder::less_than(&current_upper, &desired_frontier) {
+                    // The maximal description range we can produce.
+                    let batch_description = (current_upper.to_owned(), desired_frontier.to_owned());
+
+                    let lower = batch_description.0.as_option().copied().unwrap();
+
+                    let cap = cap_set
+                        .try_delayed(&lower)
+                        .ok_or_else(|| {
+                            format!(
+                                "minter cannot delay {:?} to {:?}. \
                                 Likely because we already emitted a \
                                 batch description and delayed.",
-                            cap_set, lower
-                        )
-                    })
-                    .unwrap();
+                                cap_set, lower
+                            )
+                        })
+                        .unwrap();
 
-                trace!(
-                    "persist_sink {collection_id}/{shard_id}: \
+                    trace!(
+                        "persist_sink {collection_id}/{shard_id}: \
                         new batch_description: {:?}",
-                    batch_description
-                );
+                        batch_description
+                    );
 
-                output.give(&cap, batch_description).await;
+                    output.give(&cap, batch_description).await;
 
-                // We downgrade our capability to the batch
-                // description upper, as there will never be
-                // any overlapping descriptions.
-                trace!(
-                    "persist_sink {collection_id}/{shard_id}: \
+                    // We downgrade our capability to the batch
+                    // description upper, as there will never be
+                    // any overlapping descriptions.
+                    trace!(
+                        "persist_sink {collection_id}/{shard_id}: \
                         downgrading to {:?}",
-                    desired_frontier
-                );
-                cap_set.downgrade(desired_frontier.iter());
+                        desired_frontier
+                    );
+                    cap_set.downgrade(desired_frontier.iter());
 
-                // After successfully emitting a new description, we can update the upper for the
-                // operator.
-                current_upper = desired_frontier.to_owned();
+                    // After successfully emitting a new description, we can update the upper for the
+                    // operator.
+                    current_upper = desired_frontier.to_owned();
+                }
             }
-        }
+        })
     });
 
     (
@@ -603,7 +605,7 @@ where
     // will cause the changes of desired to be committed to persist, _but only those also past the
     // upper_.
 
-    let shutdown_button = write_op.build(move |_capabilities| async move {
+    let shutdown_button = write_op.build(move |_capabilities| Box::pin(async move {
         // In-progress batches of data, keyed by timestamp.
         let mut stashed_batches = BTreeMap::new();
 
@@ -892,7 +894,7 @@ where
                 );
             }
         }
-    });
+    }));
 
     if collection_id.is_user() {
         output_stream.inspect(|d| trace!("batch: {:?}", d));

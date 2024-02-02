@@ -76,58 +76,60 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
 
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
-    builder.build(move |_| async move {
-        let registry = match csr_connection {
-            None => None,
-            Some(conn) => Some(
-                // This also panics on connections errors. cdc_v2 is unused so we don't handle
-                // errors right now.
-                conn.connect(&storage_configuration)
-                    .await
-                    .expect("CSR connection unexpectedly missing secrets"),
-            ),
-        };
-
-        // We have already checked validity of the schema by now, so this can't fail.
-        let mut resolver =
-            ConfluentAvroResolver::new(&schema, registry, confluent_wire_format).unwrap();
-
-        while let Some(event) = input_handle.next().await {
-            let AsyncEvent::Data(_time, data) = event else {
-                continue;
+    builder.build(move |_| {
+        Box::pin(async move {
+            let registry = match csr_connection {
+                None => None,
+                Some(conn) => Some(
+                    // This also panics on connections errors. cdc_v2 is unused so we don't handle
+                    // errors right now.
+                    conn.connect(&storage_configuration)
+                        .await
+                        .expect("CSR connection unexpectedly missing secrets"),
+                ),
             };
 
-            for (data, _time, _diff) in data {
-                let value = match data.value.unpack_first() {
-                    Datum::Bytes(value) => value,
-                    Datum::Null => continue,
-                    _ => unreachable!("invalid datum"),
+            // We have already checked validity of the schema by now, so this can't fail.
+            let mut resolver =
+                ConfluentAvroResolver::new(&schema, registry, confluent_wire_format).unwrap();
+
+            while let Some(event) = input_handle.next().await {
+                let AsyncEvent::Data(_time, data) = event else {
+                    continue;
                 };
-                let (mut data, schema, _) = match resolver.resolve(&*value).await {
-                    Ok(Ok(ok)) => ok,
-                    // TODO: restart the dataflow on transient errors
-                    Ok(Err(e)) | Err(e) => {
-                        error!("Failed to get schema info for CDCv2 record: {}", e);
-                        continue;
-                    }
-                };
-                let d = GeneralDeserializer {
-                    schema: schema.top_node(),
-                };
-                let dec = mz_interchange::avro::cdc_v2::Decoder;
-                let message = match d.deserialize(&mut data, dec) {
-                    Ok(ok) => ok,
-                    Err(e) => {
-                        error!("Failed to deserialize avro message: {}", e);
-                        continue;
-                    }
-                };
-                channel_tx.borrow_mut().push_back(message);
+
+                for (data, _time, _diff) in data {
+                    let value = match data.value.unpack_first() {
+                        Datum::Bytes(value) => value,
+                        Datum::Null => continue,
+                        _ => unreachable!("invalid datum"),
+                    };
+                    let (mut data, schema, _) = match resolver.resolve(&*value).await {
+                        Ok(Ok(ok)) => ok,
+                        // TODO: restart the dataflow on transient errors
+                        Ok(Err(e)) | Err(e) => {
+                            error!("Failed to get schema info for CDCv2 record: {}", e);
+                            continue;
+                        }
+                    };
+                    let d = GeneralDeserializer {
+                        schema: schema.top_node(),
+                    };
+                    let dec = mz_interchange::avro::cdc_v2::Decoder;
+                    let message = match d.deserialize(&mut data, dec) {
+                        Ok(ok) => ok,
+                        Err(e) => {
+                            error!("Failed to deserialize avro message: {}", e);
+                            continue;
+                        }
+                    };
+                    channel_tx.borrow_mut().push_back(message);
+                }
+                if let Some(activator) = activator_get.borrow_mut().as_mut() {
+                    activator.activate().unwrap()
+                }
             }
-            if let Some(activator) = activator_get.borrow_mut().as_mut() {
-                activator.activate().unwrap()
-            }
-        }
+        })
     });
     struct VdIterator<T>(Rc<RefCell<VecDeque<T>>>);
     impl<T> Iterator for VdIterator<T> {
@@ -145,10 +147,12 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
     // The token returned by DD's operator is not compatible with the shutdown mechanism used in
     // storage so we create a dummy operator to hold onto that token.
     let builder = AsyncOperatorBuilder::new("CDCv2-Token".to_owned(), input.scope());
-    let button = builder.build(move |_caps| async move {
-        let _dd_token = token;
-        // Keep this operator around until shutdown
-        std::future::pending::<()>().await;
+    let button = builder.build(move |_caps| {
+        Box::pin(async move {
+            let _dd_token = token;
+            // Keep this operator around until shutdown
+            std::future::pending::<()>().await;
+        })
     });
     (stream.as_collection(), button.press_on_drop())
 }

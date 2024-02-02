@@ -680,33 +680,35 @@ async fn run_benchmark(
                 AsyncOperatorBuilder::new("progress-bridge".to_string(), scope.clone());
 
             let probe_clone = probe.clone();
-            let _shutdown_button = progress_op.build(move |_capabilities| async move {
-                if !active_worker {
-                    return;
-                }
-
-                let progress_tx = progress_tx
-                    .lock()
-                    .expect("lock poisoned")
-                    .take()
-                    .expect("someone took our progress_tx");
-
-                loop {
-                    let _progressed = probe_clone.progressed().await;
-                    let mut frontier = Antichain::new();
-                    probe_clone.with_frontier(|new_frontier| {
-                        frontier.clone_from(&new_frontier.to_owned())
-                    });
-                    if !frontier.is_empty() {
-                        let progress_ts = frontier.into_option().unwrap();
-                        if let Err(SendError(_)) = progress_tx.send(progress_ts) {
-                            return;
-                        }
-                    } else {
-                        // We're done!
+            let _shutdown_button = progress_op.build(move |_capabilities| {
+                Box::pin(async move {
+                    if !active_worker {
                         return;
                     }
-                }
+
+                    let progress_tx = progress_tx
+                        .lock()
+                        .expect("lock poisoned")
+                        .take()
+                        .expect("someone took our progress_tx");
+
+                    loop {
+                        let _progressed = probe_clone.progressed().await;
+                        let mut frontier = Antichain::new();
+                        probe_clone.with_frontier(|new_frontier| {
+                            frontier.clone_from(&new_frontier.to_owned())
+                        });
+                        if !frontier.is_empty() {
+                            let progress_ts = frontier.into_option().unwrap();
+                            if let Err(SendError(_)) = progress_tx.send(progress_ts) {
+                                return;
+                            }
+                        } else {
+                            // We're done!
+                            return;
+                        }
+                    }
+                })
             });
 
             probe
@@ -794,36 +796,38 @@ where
 
     let (mut output, output_stream) = source_op.new_output();
 
-    let _shutdown_button = source_op.build(move |mut capabilities| async move {
-        if !active_worker {
-            return;
-        }
+    let _shutdown_button = source_op.build(move |mut capabilities| {
+        Box::pin(async move {
+            if !active_worker {
+                return;
+            }
 
-        let mut cap = capabilities.pop().expect("missing capability");
+            let mut cap = capabilities.pop().expect("missing capability");
 
-        let mut generator_rx = {
-            let mut generator_rxs = generator_rxs.lock().expect("lock poisoned");
-            generator_rxs
-                .remove(&source_id)
-                .expect("someone else took our channel")
-        };
+            let mut generator_rx = {
+                let mut generator_rxs = generator_rxs.lock().expect("lock poisoned");
+                generator_rxs
+                    .remove(&source_id)
+                    .expect("someone else took our channel")
+            };
 
-        while let Some(event) = generator_rx.recv().await {
-            match event {
-                GeneratorEvent::Progress(ts) => {
-                    trace!("source {source_id}, progress: {ts}");
-                    cap.downgrade(&ts);
-                }
-                GeneratorEvent::Data(batch) => {
-                    let mut batch = batch
-                        .iter()
-                        .map(|((key, value), _ts, _diff)| (key.to_vec(), value.to_vec()))
-                        .collect_vec();
+            while let Some(event) = generator_rx.recv().await {
+                match event {
+                    GeneratorEvent::Progress(ts) => {
+                        trace!("source {source_id}, progress: {ts}");
+                        cap.downgrade(&ts);
+                    }
+                    GeneratorEvent::Data(batch) => {
+                        let mut batch = batch
+                            .iter()
+                            .map(|((key, value), _ts, _diff)| (key.to_vec(), value.to_vec()))
+                            .collect_vec();
 
-                    output.give_container(&cap, &mut batch).await;
+                        output.give_container(&cap, &mut batch).await;
+                    }
                 }
             }
-        }
+        })
     });
 
     output_stream

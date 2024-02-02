@@ -88,64 +88,66 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
         let (mut data_output, stream) = builder.new_output();
 
-        let button = builder.build(move |caps| async move {
-            let mut cap = caps.into_element();
+        let button = builder.build(move |caps| {
+            Box::pin(async move {
+                let mut cap = caps.into_element();
 
-            if !config.responsible_for(()) {
-                return;
-            }
-
-            let resume_upper = Antichain::from_iter(
-                config.source_resume_uppers[&config.id]
-                    .iter()
-                    .map(MzOffset::decode_row),
-            );
-
-            let Some(resume_offset) = resume_upper.into_option() else {
-                return;
-            };
-
-            let mut rows = as_generator(&self.load_generator, self.tick_micros).by_seed(
-                mz_ore::now::SYSTEM_TIME.clone(),
-                None,
-                resume_offset,
-            );
-
-            let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
-
-            while let Some((output, event)) = rows.next() {
-                match event {
-                    Event::Message(offset, (value, diff)) => {
-                        let message = (
-                            output,
-                            Ok(SourceMessage {
-                                key: Row::default(),
-                                value,
-                                metadata: Row::default(),
-                            }),
-                        );
-
-                        // Some generators always reproduce their TVC from the beginning which can
-                        // generate a significant amount of data that will overwhelm the dataflow.
-                        // Since those are not required downstream we eagerly ignore them here.
-                        if resume_offset <= offset {
-                            data_output.give(&cap, (message, offset, diff)).await;
-                        }
-                    }
-                    Event::Progress(Some(offset)) => {
-                        cap.downgrade(&offset);
-                        // We only sleep if we have surpassed the resume offset so that we can
-                        // quickly go over any historical updates that a generator might choose to
-                        // emit.
-                        // TODO(petrosagg): Remove the sleep below and make generators return an
-                        // async stream so that they can drive the rate of production directly
-                        if resume_offset < offset {
-                            tokio::time::sleep(tick).await;
-                        }
-                    }
-                    Event::Progress(None) => return,
+                if !config.responsible_for(()) {
+                    return;
                 }
-            }
+
+                let resume_upper = Antichain::from_iter(
+                    config.source_resume_uppers[&config.id]
+                        .iter()
+                        .map(MzOffset::decode_row),
+                );
+
+                let Some(resume_offset) = resume_upper.into_option() else {
+                    return;
+                };
+
+                let mut rows = as_generator(&self.load_generator, self.tick_micros).by_seed(
+                    mz_ore::now::SYSTEM_TIME.clone(),
+                    None,
+                    resume_offset,
+                );
+
+                let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
+
+                while let Some((output, event)) = rows.next() {
+                    match event {
+                        Event::Message(offset, (value, diff)) => {
+                            let message = (
+                                output,
+                                Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value,
+                                    metadata: Row::default(),
+                                }),
+                            );
+
+                            // Some generators always reproduce their TVC from the beginning which can
+                            // generate a significant amount of data that will overwhelm the dataflow.
+                            // Since those are not required downstream we eagerly ignore them here.
+                            if resume_offset <= offset {
+                                data_output.give(&cap, (message, offset, diff)).await;
+                            }
+                        }
+                        Event::Progress(Some(offset)) => {
+                            cap.downgrade(&offset);
+                            // We only sleep if we have surpassed the resume offset so that we can
+                            // quickly go over any historical updates that a generator might choose to
+                            // emit.
+                            // TODO(petrosagg): Remove the sleep below and make generators return an
+                            // async stream so that they can drive the rate of production directly
+                            if resume_offset < offset {
+                                tokio::time::sleep(tick).await;
+                            }
+                        }
+                        Event::Progress(None) => return,
+                    }
+                }
+            })
         });
 
         let status = [HealthStatusMessage {

@@ -281,54 +281,58 @@ where
     );
     let (mut health_output, derived_health) = builder.new_output();
 
-    builder.build(move |mut caps| async move {
-        let health_cap = caps.pop().unwrap();
-        drop(caps);
+    builder.build(move |mut caps| {
+        Box::pin(async move {
+            let health_cap = caps.pop().unwrap();
+            drop(caps);
 
-        let mut statuses_by_idx = BTreeMap::new();
+            let mut statuses_by_idx = BTreeMap::new();
 
-        while let Some(event) = data_input.next().await {
-            let AsyncEvent::Data([cap_data, _cap_progress], mut data) = event else {
-                continue;
-            };
-            for ((output_index, message), _, _) in data.iter() {
-                let status = match message {
-                    Ok(_) => HealthStatusUpdate::running(),
-                    Err(ref error) => HealthStatusUpdate::stalled(error.inner.to_string(), None),
-                };
-
-                let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
-
-                let status = HealthStatusMessage {
-                    index: *output_index,
-                    namespace: C::STATUS_NAMESPACE.clone(),
-                    update: status,
-                };
-                if statuses.last() != Some(&status) {
-                    statuses.push(status);
-                }
-
-                match message {
-                    Ok(message) => {
-                        source_statistics.inc_messages_received_by(1);
-                        let key_len = u64::cast_from(message.key.byte_len());
-                        let value_len = u64::cast_from(message.value.byte_len());
-                        source_statistics.inc_bytes_received_by(key_len + value_len);
-                    }
-                    Err(_) => {}
-                }
-            }
-            data_output.give_container(&cap_data, &mut data).await;
-
-            for statuses in statuses_by_idx.values_mut() {
-                if statuses.is_empty() {
+            while let Some(event) = data_input.next().await {
+                let AsyncEvent::Data([cap_data, _cap_progress], mut data) = event else {
                     continue;
-                }
+                };
+                for ((output_index, message), _, _) in data.iter() {
+                    let status = match message {
+                        Ok(_) => HealthStatusUpdate::running(),
+                        Err(ref error) => {
+                            HealthStatusUpdate::stalled(error.inner.to_string(), None)
+                        }
+                    };
 
-                health_output.give_container(&health_cap, statuses).await;
-                statuses.clear()
+                    let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
+
+                    let status = HealthStatusMessage {
+                        index: *output_index,
+                        namespace: C::STATUS_NAMESPACE.clone(),
+                        update: status,
+                    };
+                    if statuses.last() != Some(&status) {
+                        statuses.push(status);
+                    }
+
+                    match message {
+                        Ok(message) => {
+                            source_statistics.inc_messages_received_by(1);
+                            let key_len = u64::cast_from(message.key.byte_len());
+                            let value_len = u64::cast_from(message.value.byte_len());
+                            source_statistics.inc_bytes_received_by(key_len + value_len);
+                        }
+                        Err(_) => {}
+                    }
+                }
+                data_output.give_container(&cap_data, &mut data).await;
+
+                for statuses in statuses_by_idx.values_mut() {
+                    if statuses.is_empty() {
+                        continue;
+                    }
+
+                    health_output.give_container(&health_cap, statuses).await;
+                    statuses.clear()
+                }
             }
-        }
+        })
     });
 
     (
@@ -432,7 +436,7 @@ where
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
     let (mut remap_output, remap_stream) = remap_op.new_output();
 
-    let button = remap_op.build(move |capabilities| async move {
+    let button = remap_op.build(move |capabilities| Box::pin(async move {
         if !active_worker {
             // This worker is not writing, so make sure it's "taken out" of the
             // calculation by advancing to the empty frontier.
@@ -529,7 +533,7 @@ where
                 }
             }
         }
-    });
+    }));
 
     (remap_stream.as_collection(), button.press_on_drop())
 }
@@ -595,7 +599,7 @@ where
     let remap_trace_updates = remap_trace_updates.inner.broadcast();
     let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates, Pipeline);
 
-    reclock_op.build(move |capabilities| async move {
+    reclock_op.build(move |capabilities| Box::pin(async move {
         // The capability of the output after reclocking the source frontier
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
@@ -780,7 +784,7 @@ where
                 }
             }
         }
-    });
+    }));
 
     // TODO(petrosagg): output the two streams directly
     let (ok_muxed_stream, err_muxed_stream) =

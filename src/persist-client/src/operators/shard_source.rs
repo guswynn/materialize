@@ -214,24 +214,26 @@ where
     );
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
-    builder.build(move |_caps| async move {
-        let Ok(mut lease_returner) = rx.await else {
-            // Either we're not the chosen worker or the dataflow was shutdown before the
-            // subscriber was even created.
-            return;
-        };
-        while let Some(event) = completed_fetches.next().await {
-            let Event::Data(_cap, data) = event else {
-                continue;
+    builder.build(move |_caps| {
+        Box::pin(async move {
+            let Ok(mut lease_returner) = rx.await else {
+                // Either we're not the chosen worker or the dataflow was shutdown before the
+                // subscriber was even created.
+                return;
             };
-            for part in data {
-                lease_returner.return_leased_part(
-                    lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part),
-                );
+            while let Some(event) = completed_fetches.next().await {
+                let Event::Data(_cap, data) = event else {
+                    continue;
+                };
+                for part in data {
+                    lease_returner.return_leased_part(
+                        lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part),
+                    );
+                }
             }
-        }
-        // Make it explicit that the subscriber is kept alive until we have finished returning parts
-        drop(return_listen_handle);
+            // Make it explicit that the subscriber is kept alive until we have finished returning parts
+            drop(return_listen_handle);
+        })
     });
 
     let mut builder =
@@ -239,7 +241,7 @@ where
     let (mut descs_output, descs_stream) = builder.new_output();
 
     #[allow(clippy::await_holding_refcell_ref)]
-    let shutdown_button = builder.build(move |caps| async move {
+    let shutdown_button = builder.build(move |caps| Box::pin(async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
         // Only one worker is responsible for distributing parts
@@ -422,7 +424,7 @@ where
             current_frontier.join_assign(&progress);
             cap_set.downgrade(progress.iter());
         }
-    });
+    }));
 
     (descs_stream, shutdown_button.press_on_drop())
 }
@@ -458,46 +460,51 @@ where
     );
     let name_owned = name.to_owned();
 
-    let shutdown_button = builder.build(move |_capabilities| async move {
-        let fetcher = {
-            client
-                .await
-                .create_batch_fetcher::<K, V, T, D>(
-                    shard_id,
-                    key_schema,
-                    val_schema,
-                    Diagnostics {
-                        shard_name: name_owned.clone(),
-                        handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
-                    },
-                )
-                .await
-        };
+    let shutdown_button = builder.build(move |_capabilities| {
+        Box::pin(async move {
+            let fetcher = {
+                client
+                    .await
+                    .create_batch_fetcher::<K, V, T, D>(
+                        shard_id,
+                        key_schema,
+                        val_schema,
+                        Diagnostics {
+                            shard_name: name_owned.clone(),
+                            handle_purpose: format!(
+                                "shard_source_fetch batch fetcher {}",
+                                name_owned
+                            ),
+                        },
+                    )
+                    .await
+            };
 
-        while let Some(event) = descs_input.next().await {
-            if let Event::Data([fetched_cap, completed_fetches_cap], data) = event {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                for (_idx, part) in data {
-                    let leased_part = fetcher.leased_part_from_exchangeable(part);
-                    let fetched = fetcher
-                        .fetch_leased_part(&leased_part)
-                        .await
-                        .expect("shard_id should match across all workers");
-                    {
-                        // Do very fine-grained output activation/session
-                        // creation to ensure that we don't hold activated
-                        // outputs or sessions across await points, which
-                        // would prevent messages from being flushed from
-                        // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched).await;
-                        completed_fetches_output
-                            .give(&completed_fetches_cap, leased_part.into_exchangeable_part())
-                            .await;
+            while let Some(event) = descs_input.next().await {
+                if let Event::Data([fetched_cap, completed_fetches_cap], data) = event {
+                    // `LeasedBatchPart`es cannot be dropped at this point w/o
+                    // panicking, so swap them to an owned version.
+                    for (_idx, part) in data {
+                        let leased_part = fetcher.leased_part_from_exchangeable(part);
+                        let fetched = fetcher
+                            .fetch_leased_part(&leased_part)
+                            .await
+                            .expect("shard_id should match across all workers");
+                        {
+                            // Do very fine-grained output activation/session
+                            // creation to ensure that we don't hold activated
+                            // outputs or sessions across await points, which
+                            // would prevent messages from being flushed from
+                            // the shared timely output buffer.
+                            fetched_output.give(&fetched_cap, fetched).await;
+                            completed_fetches_output
+                                .give(&completed_fetches_cap, leased_part.into_exchangeable_part())
+                                .await;
+                        }
                     }
                 }
             }
-        }
+        })
     });
 
     (
