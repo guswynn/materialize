@@ -29,7 +29,7 @@ networkx==3.0
 networkx-stubs==0.0.1
 numpy==1.26.1
 pandas==2.1.2
-pandas-stubs==2.1.1.230928
+pandas-stubs==2.2.1.240316
 parameterized==0.8.1
 paramiko==3.4.0
 pdoc3==0.10.0
