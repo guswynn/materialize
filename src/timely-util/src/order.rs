@@ -418,3 +418,12 @@ pub fn refine_antichain<T: Timestamp, Inner: Timestamp + Refines<T>>(
 ) -> Antichain<Inner> {
     Antichain::from_iter(frontier.iter().map(|t| Refines::to_inner(t.clone())))
 }
+
+/// Unrefine an `Antichain<Inner>` into a `Antichain<T>`, using a `Refines`
+/// implementation (in the case of tuple-style timestamps, this usually
+/// means appending a minimum time).
+pub fn unrefine_antichain<T: Timestamp, Inner: Timestamp + Refines<T>>(
+    frontier: &Antichain<Inner>,
+) -> Antichain<T> {
+    Antichain::from_iter(frontier.iter().map(|t| Refines::to_outer(t.clone())))
+}

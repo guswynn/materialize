@@ -47,6 +47,7 @@ use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::SourceError;
@@ -57,15 +58,18 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
+use mz_timely_util::order::{refine_antichain, unrefine_antichain};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::Enter;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Leave, Partition};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio_stream::wrappers::WatchStream;
@@ -150,16 +154,25 @@ impl RawSourceCreationConfig {
 ///
 /// The `resume_stream` parameter will contain frontier updates whenever times are durably
 /// recorded which allows the ingestion to release upstream resources.
-pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
-    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+pub fn create_raw_source<'c, 'g: 'c, G: Scope<Timestamp = ()>, C>(
+    mut c_scope: Child<'g, G, mz_repr::Timestamp>,
+    scope: Child<'c, Child<'g, G, mz_repr::Timestamp>, (mz_repr::Timestamp, Subtime)>,
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
+        Collection<
+            Child<'c, Child<'g, G, mz_repr::Timestamp>, (mz_repr::Timestamp, Subtime)>,
+            SourceOutput<C::Time>,
+            Diff,
+        >,
+        Collection<
+            Child<'c, Child<'g, G, mz_repr::Timestamp>, (mz_repr::Timestamp, Subtime)>,
+            SourceError,
+            Diff,
+        >,
     )>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -199,17 +212,17 @@ where
     );
 
     let (remap_stream, remap_token) = remap_operator(
-        scope,
+        &c_scope,
         config.clone(),
         source_upper_rx,
         source_connection.timestamp_desc(),
     );
     // Need to broadcast the remap changes to all workers.
-    let remap_stream = remap_stream.inner.broadcast().as_collection();
+    let remap_stream = remap_stream.inner.broadcast();
     tokens.push(remap_token);
 
     let reclocked_resume_stream = reclock_committed_upper(
-        &remap_stream,
+        &remap_stream.as_collection(),
         config.as_of.clone(),
         committed_upper,
         id,
@@ -218,7 +231,7 @@ where
 
     let (health, source_tokens) = {
         let config = config.clone();
-        scope.parent.scoped("SourceTimeDomain", move |scope| {
+        c_scope.parent.scoped("SourceTimeDomain", move |scope| {
             let (source, source_upper, health_stream, source_tokens) = source_render_operator(
                 scope,
                 config.clone(),
@@ -238,11 +251,11 @@ where
     tokens.extend(source_tokens);
 
     let streams = reclock_operator(
-        scope,
+        &scope,
         config,
         reclock_follower,
         source_rx,
-        remap_stream,
+        remap_stream.enter(&scope),
         source_metrics,
     );
 
@@ -575,14 +588,14 @@ fn reclock_operator<G, FromTime, D, M>(
         >,
         M,
     >,
-    remap_trace_updates: Collection<G, FromTime, Diff>,
+    remap_trace_updates: Stream<G, (FromTime, mz_repr::Timestamp, Diff)>,
     source_metrics: Arc<SourceMetrics>,
 ) -> Vec<(
     Collection<G, SourceOutput<FromTime>, D>,
     Collection<G, SourceError, Diff>,
 )>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
     FromTime: SourceTimestamp,
     D: Semigroup + Into<Diff>,
     M: InstrumentedChannelMetric + 'static,
@@ -613,7 +626,7 @@ where
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
     let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
-    let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
+    let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
         // The capability of the output after reclocking the source frontier
@@ -639,6 +652,7 @@ where
                     // If the remap frontier advanced it's time to carve out a batch that includes
                     // all updates not beyond the upper
                     AsyncEvent::Progress(remap_upper) => {
+                        let remap_upper = unrefine_antichain(&remap_upper);
                         let remap_trace_batch = ReclockBatch {
                             updates: remap_updates_stash
                                 .drain_filter_swapping(|(_, ts, _)| !remap_upper.less_equal(ts))
@@ -740,8 +754,8 @@ where
                             }
                         };
 
-                        let ts_cap = cap_set.delayed(&into_ts);
-                        reclocked_output.give(&ts_cap, (output, into_ts, diff)).await;
+                        let ts_cap = cap_set.delayed(&(into_ts, Subtime(1)));
+                        reclocked_output.give(&ts_cap, (output, (into_ts, Subtime(1)), diff)).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
@@ -767,7 +781,7 @@ where
                             .expect("there can be at most one element for totally ordered times")
                             .map(|c| c.time())
                             .cloned()
-                            .unwrap_or(mz_repr::Timestamp::MAX)
+                            .unwrap_or(Refines::to_inner(mz_repr::Timestamp::MAX)).0
                             .into(),
                     );
 
@@ -790,7 +804,7 @@ where
                         into_ready_upper.pretty()
                     );
 
-                    cap_set.downgrade(into_ready_upper.elements());
+                    cap_set.downgrade(refine_antichain(&into_ready_upper).elements());
                     timestamper.compact(into_ready_upper.clone());
                     if into_ready_upper.is_empty() {
                         return;

@@ -71,7 +71,7 @@ use crate::metrics::BackpressureMetrics;
 #[derive(
     Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
 )]
-pub struct Subtime(u64);
+pub struct Subtime(pub u64);
 
 impl PartialOrder for Subtime {
     fn less_equal(&self, other: &Self) -> bool {
@@ -248,7 +248,7 @@ where
     (ok_stream, err_stream, tokens)
 }
 
-type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
+pub type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
