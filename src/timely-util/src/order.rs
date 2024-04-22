@@ -158,6 +158,15 @@ impl Extrema for u64 {
     }
 }
 
+impl Extrema for usize {
+    fn minimum() -> Self {
+        Self::MIN
+    }
+    fn maximum() -> Self {
+        Self::MAX
+    }
+}
+
 impl Extrema for i32 {
     fn minimum() -> Self {
         Self::MIN

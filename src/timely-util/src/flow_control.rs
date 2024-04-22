@@ -13,19 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Utilities for working with Timely.
+//! Operators and abstractions for flow control.
 
-pub mod activator;
-pub mod antichain;
-pub mod buffer;
-pub mod builder_async;
-pub mod capture;
-pub mod event;
-pub mod flow_control;
-pub mod operator;
-pub mod order;
-pub mod pact;
-pub mod panic;
-pub mod probe;
-pub mod progress;
-pub mod replay;
+use timely::dataflow::scopes::Child;
+use timely::dataflow::scopes::ScopeParent;
+
+use crate::order::Partitioned;
+
+pub mod streaming_chunks;
+
+/// A `T: Timestamp` broken into granular chunks, with each chunk
+/// partitioned by worker id.
+pub type Subtime<T> = (T, Partitioned<usize, usize>);
+
+/// A child of `T: Timestamp` that is
+pub type GranularChild<'c, G> = Child<'c, G, Subtime<<G as ScopeParent>::Timestamp>>;
