@@ -798,7 +798,7 @@ dependencies = [
  "aws-smithy-types",
  "bytes",
  "fastrand",
- "h2",
+ "h2 0.3.26",
  "http 0.2.9",
  "http-body 0.4.5",
  "http-body 1.0.0",
@@ -2681,6 +2681,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "816ec7294445779408f36fe57bc5b7fc1cf59664059096c65f905c1c61f58069"
+dependencies = [
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
+ "http 1.1.0",
+ "indexmap 2.0.0",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "half"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2927,7 +2946,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2",
+ "h2 0.3.26",
  "http 0.2.9",
  "http-body 0.4.5",
  "httparse",
@@ -5375,7 +5394,7 @@ dependencies = [
  "futures",
  "futures-task",
  "futures-util",
- "h2",
+ "h2 0.4.4",
  "hex",
  "mz-build-info",
  "mz-build-tools",
@@ -8062,7 +8081,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2",
+ "h2 0.3.26",
  "http 0.2.9",
  "http-body 0.4.5",
  "hyper",
@@ -9640,7 +9659,7 @@ dependencies = [
  "flate2",
  "futures-core",
  "futures-util",
- "h2",
+ "h2 0.3.26",
  "http 0.2.9",
  "http-body 0.4.5",
  "hyper",
