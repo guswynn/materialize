@@ -17,6 +17,9 @@
 
 use std::collections::BTreeMap;
 
+use differential_dataflow::collection::AsCollection;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
@@ -27,7 +30,7 @@ use timely::progress::timestamp::Timestamp;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
-use super::GranularChild;
+use super::{GranularChild, Subtime};
 use crate::order::Partitioned;
 
 /// Given an input stream of data within `T: Timestamp` scope, granular-ize the output
@@ -49,13 +52,51 @@ where
     G::Timestamp: Timestamp + Ord,
     D: timely::Data,
 {
+    let data = data.enter(&child);
+    _streaming_chunks(scope, child, name, &data, |_, _| {})
+}
+
+/// The same as `streaming_chunks`, but for `Collection`s.
+///
+// TODO(guswynn): test this ugh
+pub fn streaming_chunks_collection<'c, G, D, Diff>(
+    scope: G,
+    child: GranularChild<'c, G>,
+    name: String,
+    data: &Collection<G, D, Diff>,
+) -> Collection<GranularChild<'c, G>, D, Diff>
+where
+    G: Scope,
+    G::Timestamp: Timestamp + Ord,
+    D: timely::Data,
+    Diff: Semigroup,
+{
+    let data = data.enter(&child);
+
+    _streaming_chunks(scope, child, name, &data.inner, |(_, base, _), new_ts| {
+        *base = new_ts.clone()
+    })
+    .as_collection()
+}
+
+pub fn _streaming_chunks<'c, G, D, F>(
+    scope: G,
+    child: GranularChild<'c, G>,
+    name: String,
+    data: &Stream<GranularChild<'c, G>, D>,
+    ts_mapper: F,
+) -> Stream<GranularChild<'c, G>, D>
+where
+    G: Scope,
+    G::Timestamp: Timestamp + Ord,
+    D: timely::Data,
+    F: Fn(&mut D, &Subtime<G::Timestamp>) + 'static,
+{
     let worker_index = scope.index();
 
     let mut builder = OperatorBuilder::new(name, child.clone());
 
     let (mut data_output, data_stream) = builder.new_output();
-
-    let data = data.enter(&child);
     let mut data_input = builder.new_input_connection(&data, Pipeline, vec![Antichain::new()]);
 
     builder.build(move |mut caps| {
@@ -90,6 +131,7 @@ where
                     Partitioned::new_singleton(worker_index, *subtime),
                 ));
                 let mut session = data_output.session(&cap);
+                vector.iter_mut().for_each(|d| ts_mapper(d, cap.time()));
                 session.give_container(&mut vector);
 
                 // Increment the subtime for this outer time.
@@ -137,7 +179,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
@@ -317,16 +359,17 @@ mod tests {
 
     /// An operator that emits the given containers of data, waiting for notifications
     /// before downgrading the frontier.
-    fn input_operator<
+    pub(crate) fn input_operator<
         G: Scope<Timestamp = u64>,
-        I: Iterator<Item = Vec<Vec<&'static str>>> + 'static,
+        I: Iterator<Item = Vec<Vec<S>>> + 'static,
+        S: Clone + 'static,
     >(
         scope: G,
         mut input: I,
         skip_input: bool,
-    ) -> (Stream<G, &'static str>, Arc<Notify>) {
+    ) -> (Stream<G, S>, Arc<Notify>) {
         let mut iterator = AsyncOperatorBuilder::new("input".to_string(), scope);
-        let (mut output_handle, output) = iterator.new_output::<Vec<&'static str>>();
+        let (mut output_handle, output) = iterator.new_output::<Vec<S>>();
 
         let notif = Arc::new(Notify::new());
         let in_notif = Arc::clone(&notif);

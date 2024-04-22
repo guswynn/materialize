@@ -20,6 +20,7 @@ use timely::dataflow::scopes::ScopeParent;
 
 use crate::order::Partitioned;
 
+pub mod quota_feedback;
 pub mod streaming_chunks;
 
 /// A `T: Timestamp` broken into granular chunks, with each chunk
