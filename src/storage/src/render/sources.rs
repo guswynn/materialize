@@ -20,7 +20,6 @@ use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_storage_operators::persist_source;
-use mz_storage_operators::persist_source::{RefinedScope, Subtime};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{
@@ -30,6 +29,7 @@ use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
 use mz_storage_types::sources::*;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::flow_control::{GranularChild as RefinedScope, Subtime};
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::decode::{render_decode_cdcv2, render_decode_delimited};
+use crate::decode::{render_decode_cdcv2 as _, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::render::upsert::UpsertKey;
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
@@ -135,7 +135,7 @@ where
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let (outputs, health) =
-        scope.scoped::<(mz_repr::Timestamp, Subtime), _, _>("lalala", |refined_scope| {
+        scope.scoped::<Subtime<mz_repr::Timestamp>, _, _>("lalala", |refined_scope| {
             let (streams, mut health, source_tokens) = source::create_raw_source(
                 scope2,
                 refined_scope.clone(),
@@ -178,7 +178,7 @@ where
 /// Completes the rendering of a particular source stream by applying decoding and envelope
 /// processing as necessary
 fn render_source_stream<'g, G, FromTime>(
-    mut scope: Child<'g, G, (mz_repr::Timestamp, Subtime)>,
+    mut scope: Child<'g, G, Subtime<mz_repr::Timestamp>>,
     dataflow_debug_name: &String,
     id: GlobalId,
     ok_source: Collection<RefinedScope<'g, G>, SourceOutput<FromTime>, Diff>,
@@ -260,48 +260,51 @@ where
                         );
 
                         let (feedback_handle, flow_control, backpressure_metrics) =
-                            if let Some(storage_dataflow_max_inflight_bytes) =
-                                backpressure_max_inflight_bytes
-                            {
-                                tracing::info!(
-                                    ?backpressure_max_inflight_bytes,
-                                    "timely-{} using backpressure in upsert for source {}",
-                                    base_source_config.worker_id,
-                                    id
-                                );
-                                if !storage_state
-                                    .storage_configuration
-                                    .parameters
-                                    .storage_dataflow_max_inflight_bytes_config
-                                    .disk_only
-                                    || storage_state.instance_context.scratch_directory.is_some()
+                            (None, None, None);
+                        /*
+                                if let Some(storage_dataflow_max_inflight_bytes) =
+                                    backpressure_max_inflight_bytes
                                 {
-                                    let (feedback_handle, feedback_data) =
-                                        scope.feedback(Default::default());
-
-                                    // TODO(guswynn): cleanup
-                                    let backpressure_metrics = Some(
-                                        base_source_config
-                                            .metrics
-                                            .get_backpressure_metrics(id, scope.index()),
+                                    tracing::info!(
+                                        ?backpressure_max_inflight_bytes,
+                                        "timely-{} using backpressure in upsert for source {}",
+                                        base_source_config.worker_id,
+                                        id
                                     );
+                                    if !storage_state
+                                        .storage_configuration
+                                        .parameters
+                                        .storage_dataflow_max_inflight_bytes_config
+                                        .disk_only
+                                        || storage_state.instance_context.scratch_directory.is_some()
+                                    {
+                                        let (feedback_handle, feedback_data) =
+                                            scope.feedback(Default::default());
 
-                                    (
-                                        Some(feedback_handle),
-                                        Some(persist_source::FlowControl {
-                                            progress_stream: feedback_data,
-                                            max_inflight_bytes: storage_dataflow_max_inflight_bytes,
-                                            summary: (Default::default(), Subtime::least_summary()),
-                                            metrics: backpressure_metrics.clone(),
-                                        }),
-                                        backpressure_metrics,
-                                    )
+                                        // TODO(guswynn): cleanup
+                                        let backpressure_metrics = Some(
+                                            base_source_config
+                                                .metrics
+                                                .get_backpressure_metrics(id, scope.index()),
+                                        );
+
+                                        (
+                                            Some(feedback_handle),
+                                            Some(persist_source::FlowControl {
+                                                progress_stream: feedback_data,
+                                                max_inflight_bytes: storage_dataflow_max_inflight_bytes,
+                                                summary: (Default::default(), Subtime::least_summary()),
+                                                metrics: backpressure_metrics.clone(),
+                                            }),
+                                            backpressure_metrics,
+                                        )
+                                    } else {
+                                        (None, None, None)
+                                    }
                                 } else {
                                     (None, None, None)
-                                }
-                            } else {
-                                (None, None, None)
-                            };
+                                };
+                        */
                         let (stream, tok) = persist_source::persist_source_core(
                             &scope,
                             id,

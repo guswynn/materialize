@@ -166,8 +166,6 @@ pub fn rehydration_finished<G, T>(
     let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
     let mut input = builder.new_disconnected_input(input, Pipeline);
 
-    let logger = source_config.responsible_for(());
-
     builder.build(move |_capabilities| async move {
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
         // Ensure this operator finishes if the resume upper is `[0]`
@@ -176,25 +174,13 @@ pub fn rehydration_finished<G, T>(
                 break;
             };
             if let AsyncEvent::Progress(upper) = event {
-                if logger {
-                    tracing::debug!("upsert frontier: {upper:?}");
-                }
                 input_upper = upper;
             }
         }
         tracing::info!(
-            "timely-{worker_id} upsert source {id} has downgraded \
-            past the resume upper ({resume_upper:?}) across all workers",
+            "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
         );
         drop(token);
-
-        if logger {
-            while let Some(event) = input.next().await {
-                if let AsyncEvent::Progress(upper) = event {
-                    tracing::debug!("upsert frontier: {upper:?}");
-                }
-            }
-        }
     });
 }
 
@@ -472,7 +458,6 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // `merge_snapshot_chunk` implementation, minimizing gets and puts on
     // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
     while let Some((ts, key, from_time, value)) = commands.next() {
-        tracing::debug!("data at time: {ts:?}");
         let mut command_state = if let Entry::Occupied(command_state) = commands_state.entry(key) {
             command_state
         } else {

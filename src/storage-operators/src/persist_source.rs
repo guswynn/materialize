@@ -61,6 +61,7 @@ use tracing::trace;
 
 use crate::metrics::BackpressureMetrics;
 
+/*
 /// This opaque token represents progress within a timestamp, allowing finer-grained frontier
 /// progress than would otherwise be possible.
 ///
@@ -105,6 +106,9 @@ impl Subtime {
         Subtime(1)
     }
 }
+*/
+
+use mz_timely_util::flow_control::Subtime;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -154,6 +158,8 @@ where
     let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
         let (flow_control, flow_control_probe) = match max_inflight_bytes {
             Some(max_inflight_bytes) => {
+                (None, None)
+                /*
                 let backpressure_metrics = BackpressureMetrics {
                     emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
                     last_backpressured_bytes: Arc::clone(
@@ -175,6 +181,7 @@ where
                     metrics: Some(backpressure_metrics),
                 };
                 (Some(flow_control), Some(probe))
+                    */
             }
             None => (None, None),
         };
@@ -248,7 +255,7 @@ where
     (ok_stream, err_stream, tokens)
 }
 
-pub type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
+use mz_timely_util::flow_control::GranularChild as RefinedScope;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -275,7 +282,7 @@ pub fn persist_source_core<'g, G>(
         RefinedScope<'g, G>,
         (
             Result<Row, DataflowError>,
-            (mz_repr::Timestamp, Subtime),
+            Subtime<mz_repr::Timestamp>,
             Diff,
         ),
     >,
@@ -290,17 +297,22 @@ where
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
 
     let desc_transformer = match flow_control {
-        Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
-            let (stream, token) = backpressure(
-                &mut scope,
-                &format!("backpressure({source_id})"),
-                descs,
-                flow_control,
-                chosen_worker,
-                None,
-            );
-            (stream, vec![token])
-        }),
+        Some(flow_control) => {
+            Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
+                (descs.clone(), vec![])
+                /*
+                let (stream, token) = backpressure(
+                    &mut scope,
+                    &format!("backpressure({source_id})"),
+                    descs,
+                    flow_control,
+                    chosen_worker,
+                    None,
+                );
+                (stream, vec![token])
+                    */
+            })
+        }
         None => None,
     };
 
@@ -388,7 +400,7 @@ pub fn decode_and_mfp<G>(
     mut map_filter_project: Option<&mut MfpPlan>,
 ) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
-    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
+    G: Scope<Timestamp = Subtime<mz_repr::Timestamp>>,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -465,7 +477,7 @@ where
 /// Pending work to read from fetched parts
 struct PendingWork {
     /// The time at which the work should happen.
-    capability: Capability<(mz_repr::Timestamp, Subtime)>,
+    capability: Capability<Subtime<mz_repr::Timestamp>>,
     /// Pending fetched part.
     part: PendingPart,
 }
@@ -504,7 +516,7 @@ impl PendingWork {
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
         output: &mut ConsolidateBuffer<
-            (mz_repr::Timestamp, Subtime),
+            Subtime<mz_repr::Timestamp>,
             Result<Row, DataflowError>,
             Diff,
             P,
@@ -513,10 +525,10 @@ impl PendingWork {
     where
         P: Push<
             Bundle<
-                (mz_repr::Timestamp, Subtime),
+                Subtime<mz_repr::Timestamp>,
                 Vec<(
                     Result<Row, DataflowError>,
-                    (mz_repr::Timestamp, Subtime),
+                    Subtime<mz_repr::Timestamp>,
                     Diff,
                 )>,
             >,
@@ -574,7 +586,7 @@ impl PendingWork {
                                 Ok((row, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
-                                        let mut emit_time = *self.capability.time();
+                                        let mut emit_time = self.capability.time().clone();
                                         emit_time.0 = time;
                                         output
                                             .give_at(&self.capability, (Ok(row), emit_time, diff));
@@ -584,7 +596,7 @@ impl PendingWork {
                                 Err((err, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
-                                        let mut emit_time = *self.capability.time();
+                                        let mut emit_time = self.capability.time().clone();
                                         emit_time.0 = time;
                                         output
                                             .give_at(&self.capability, (Err(err), emit_time, diff));
@@ -599,14 +611,14 @@ impl PendingWork {
                         drop(datums_local);
                         row_buf.replace(SourceData(Ok(row)));
                     } else {
-                        let mut emit_time = *self.capability.time();
+                        let mut emit_time = self.capability.time().clone();
                         emit_time.0 = time;
                         output.give_at(&self.capability, (Ok(row), emit_time, diff));
                         *work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
-                    let mut emit_time = *self.capability.time();
+                    let mut emit_time = self.capability.time().clone();
                     emit_time.0 = time;
                     output.give_at(&self.capability, (Err(err), emit_time, diff));
                     *work += 1;
@@ -655,6 +667,7 @@ pub struct FlowControl<G: Scope> {
     pub metrics: Option<BackpressureMetrics>,
 }
 
+/*
 /// Apply flow control to the `data` input, based on the given `FlowControl`.
 ///
 /// The `FlowControl` should have a `progress_stream` that is the pristine, unaltered
@@ -1405,3 +1418,4 @@ mod tests {
         tx
     }
 }
+*/

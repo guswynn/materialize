@@ -47,7 +47,6 @@ use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
-use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::SourceError;
@@ -57,6 +56,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
+use mz_timely_util::flow_control::Subtime;
 use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::order::{refine_antichain, unrefine_antichain};
 use timely::dataflow::channels::pact::Pipeline;
@@ -156,7 +156,7 @@ impl RawSourceCreationConfig {
 /// recorded which allows the ingestion to release upstream resources.
 pub fn create_raw_source<'c, 'g: 'c, G: Scope<Timestamp = ()>, C>(
     mut c_scope: Child<'g, G, mz_repr::Timestamp>,
-    scope: Child<'c, Child<'g, G, mz_repr::Timestamp>, (mz_repr::Timestamp, Subtime)>,
+    scope: Child<'c, Child<'g, G, mz_repr::Timestamp>, Subtime<mz_repr::Timestamp>>,
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
@@ -164,12 +164,12 @@ pub fn create_raw_source<'c, 'g: 'c, G: Scope<Timestamp = ()>, C>(
 ) -> (
     Vec<(
         Collection<
-            Child<'c, Child<'g, G, mz_repr::Timestamp>, (mz_repr::Timestamp, Subtime)>,
+            Child<'c, Child<'g, G, mz_repr::Timestamp>, Subtime<mz_repr::Timestamp>>,
             SourceOutput<C::Time>,
             Diff,
         >,
         Collection<
-            Child<'c, Child<'g, G, mz_repr::Timestamp>, (mz_repr::Timestamp, Subtime)>,
+            Child<'c, Child<'g, G, mz_repr::Timestamp>, Subtime<mz_repr::Timestamp>>,
             SourceError,
             Diff,
         >,
@@ -595,7 +595,7 @@ fn reclock_operator<G, FromTime, D, M>(
     Collection<G, SourceError, Diff>,
 )>
 where
-    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
+    G: Scope<Timestamp = Subtime<mz_repr::Timestamp>>,
     FromTime: SourceTimestamp,
     D: Semigroup + Into<Diff>,
     M: InstrumentedChannelMetric + 'static,
@@ -754,8 +754,8 @@ where
                             }
                         };
 
-                        let ts_cap = cap_set.delayed(&(into_ts, Subtime(1)));
-                        reclocked_output.give(&ts_cap, (output, (into_ts, Subtime(1)), diff)).await;
+                        let ts_cap = cap_set.delayed(&Refines::to_inner(into_ts));
+                        reclocked_output.give(&ts_cap, (output, Refines::to_inner(into_ts), diff)).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
