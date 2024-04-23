@@ -49,6 +49,8 @@ impl<'a, T: Display> AntichainExt for AntichainRef<'a, T> {
     }
 }
 
+// TODO(guswynn): mostly_pretty, for Antichains PLUS `Partitioned` (should understand singletons)
+
 pub struct FrontierPrinter<F>(F);
 
 impl<'a, T: Display> Display for FrontierPrinter<AntichainRef<'a, T>> {
