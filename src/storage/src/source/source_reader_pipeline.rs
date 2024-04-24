@@ -218,11 +218,11 @@ where
         source_connection.timestamp_desc(),
     );
     // Need to broadcast the remap changes to all workers.
-    let remap_stream = remap_stream.inner.broadcast();
+    let remap_stream = remap_stream.inner.broadcast().as_collection();
     tokens.push(remap_token);
 
     let reclocked_resume_stream = reclock_committed_upper(
-        &remap_stream.as_collection(),
+        &remap_stream,
         config.as_of.clone(),
         committed_upper,
         id,
@@ -251,13 +251,18 @@ where
     tokens.extend(source_tokens);
 
     let streams = reclock_operator(
-        &scope,
+        &c_scope,
         config,
         reclock_follower,
         source_rx,
-        remap_stream.enter(&scope),
+        remap_stream,
         source_metrics,
     );
+
+    let streams = streams
+        .into_iter()
+        .map(|(k, v)| (k.enter(&scope), v.enter(&scope)))
+        .collect();
 
     (streams, health, tokens)
 }
@@ -588,14 +593,14 @@ fn reclock_operator<G, FromTime, D, M>(
         >,
         M,
     >,
-    remap_trace_updates: Stream<G, (FromTime, mz_repr::Timestamp, Diff)>,
+    remap_trace_updates: Collection<G, FromTime, Diff>,
     source_metrics: Arc<SourceMetrics>,
 ) -> Vec<(
     Collection<G, SourceOutput<FromTime>, D>,
     Collection<G, SourceError, Diff>,
 )>
 where
-    G: Scope<Timestamp = Subtime<mz_repr::Timestamp>>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
     D: Semigroup + Into<Diff>,
     M: InstrumentedChannelMetric + 'static,
@@ -626,7 +631,7 @@ where
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
     let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
-    let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates, Pipeline);
+    let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
         // The capability of the output after reclocking the source frontier
@@ -652,7 +657,6 @@ where
                     // If the remap frontier advanced it's time to carve out a batch that includes
                     // all updates not beyond the upper
                     AsyncEvent::Progress(remap_upper) => {
-                        let remap_upper = unrefine_antichain(&remap_upper);
                         let remap_trace_batch = ReclockBatch {
                             updates: remap_updates_stash
                                 .drain_filter_swapping(|(_, ts, _)| !remap_upper.less_equal(ts))
@@ -754,8 +758,8 @@ where
                             }
                         };
 
-                        let ts_cap = cap_set.delayed(&Refines::to_inner(into_ts));
-                        reclocked_output.give(&ts_cap, (output, Refines::to_inner(into_ts), diff)).await;
+                        let ts_cap = cap_set.delayed(&into_ts);
+                        reclocked_output.give(&ts_cap, (output, into_ts, diff)).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
@@ -781,7 +785,7 @@ where
                             .expect("there can be at most one element for totally ordered times")
                             .map(|c| c.time())
                             .cloned()
-                            .unwrap_or(Refines::to_inner(mz_repr::Timestamp::MAX)).0
+                            .unwrap_or(mz_repr::Timestamp::MAX)
                             .into(),
                     );
 
@@ -804,7 +808,7 @@ where
                         into_ready_upper.pretty()
                     );
 
-                    cap_set.downgrade(refine_antichain(&into_ready_upper).elements());
+                    cap_set.downgrade(into_ready_upper.elements());
                     timestamper.compact(into_ready_upper.clone());
                     if into_ready_upper.is_empty() {
                         return;

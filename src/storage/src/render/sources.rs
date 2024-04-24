@@ -137,7 +137,7 @@ where
     let (outputs, health) =
         scope.scoped::<Subtime<mz_repr::Timestamp>, _, _>("lalala", |refined_scope| {
             let (streams, mut health, source_tokens) = source::create_raw_source(
-                scope2,
+                scope2.clone(),
                 refined_scope.clone(),
                 resume_stream,
                 base_source_config.clone(),
@@ -149,6 +149,14 @@ where
 
             let mut outputs = vec![];
             for (ok_source, err_source) in streams {
+                let ok_source =
+                    mz_timely_util::flow_control::streaming_chunks::streaming_chunks_collection(
+                        scope2.clone(),
+                        refined_scope.clone(),
+                        "gus".to_string(),
+                        // ugh, why the leave???
+                        &ok_source.leave(),
+                    );
                 // All sources should push their various error streams into this vector,
                 // whose contents will be concatenated and inserted along the collection.
                 // All subsources include the non-definite errors of the ingestion
@@ -325,6 +333,7 @@ where
                             backpressure_metrics,
                         )
                     } else {
+                        eprintln!("HERE");
                         (Collection::new(empty(&scope)), None, None, None)
                     };
                 let (upsert, health_update, upsert_token) =

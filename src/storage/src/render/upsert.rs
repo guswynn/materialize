@@ -190,6 +190,7 @@ pub fn rehydration_finished<G, T, Outer>(
             resume upper ({resume_upper:?}) across all workers",
         );
 
+        drop(token);
         if logger {
             while let Some(event) = input.next().await {
                 if let AsyncEvent::Progress(upper) = event {
@@ -197,7 +198,6 @@ pub fn rehydration_finished<G, T, Outer>(
                 }
             }
         }
-        drop(token);
     });
 }
 

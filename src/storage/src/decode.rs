@@ -526,7 +526,10 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                             .give_container(&cap, &mut output_container)
                             .await;
                     }
-                    AsyncEvent::Progress(frontier) => cap_set.downgrade(frontier.iter()),
+                    AsyncEvent::Progress(frontier) => {
+                        eprintln!("DECODE FRONTIER: {:?}", frontier);
+                        cap_set.downgrade(frontier.iter());
+                    }
                 }
             }
 
