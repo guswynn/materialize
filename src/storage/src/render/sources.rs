@@ -136,6 +136,13 @@ where
     // correct `SourceReader` implementations
     let (outputs, health) =
         scope.scoped::<Subtime<mz_repr::Timestamp>, _, _>("lalala", |refined_scope| {
+            use mz_timely_util::flow_control::quota_feedback::{
+                quota_feedback, FlowControl, InWorkerRowCounter,
+            };
+
+            let mut row_counter = InWorkerRowCounter::default();
+            row_counter.max = 1;
+
             let (streams, mut health, source_tokens) = source::create_raw_source(
                 scope2.clone(),
                 refined_scope.clone(),
@@ -157,6 +164,20 @@ where
                         // ugh, why the leave???
                         &ok_source.leave(),
                     );
+
+                let (feedback_handle, feedback_data) =
+                    refined_scope.clone().feedback(Default::default());
+                let ok_source = quota_feedback(
+                    scope2.clone(),
+                    refined_scope.clone(),
+                    "gus2".to_string(),
+                    &ok_source.inner,
+                    FlowControl {
+                        progress_stream: feedback_data,
+                    },
+                    row_counter.clone(),
+                )
+                .as_collection();
                 // All sources should push their various error streams into this vector,
                 // whose contents will be concatenated and inserted along the collection.
                 // All subsources include the non-definite errors of the ingestion
@@ -172,6 +193,7 @@ where
                     &storage_state,
                     base_source_config.clone(),
                     starter.clone(),
+                    feedback_handle,
                 );
                 needed_tokens.extend(extra_tokens);
                 outputs.push((ok.leave(), err.leave()));
@@ -195,6 +217,10 @@ fn render_source_stream<'g, G, FromTime>(
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
     rehydrated_token: impl std::any::Any + 'static,
+    feedback_handle: timely::dataflow::operators::core::feedback::Handle<
+        RefinedScope<'g, G>,
+        Vec<std::convert::Infallible>,
+    >,
 ) -> (
     Collection<RefinedScope<'g, G>, Row, Diff>,
     Collection<RefinedScope<'g, G>, DataflowError, Diff>,
@@ -268,7 +294,7 @@ where
                         );
 
                         let (feedback_handle, flow_control, backpressure_metrics) =
-                            (None, None, None);
+                            (Some(feedback_handle), None, None);
                         /*
                                 if let Some(storage_dataflow_max_inflight_bytes) =
                                     backpressure_max_inflight_bytes
@@ -334,7 +360,12 @@ where
                         )
                     } else {
                         eprintln!("HERE");
-                        (Collection::new(empty(&scope)), None, None, None)
+                        (
+                            Collection::new(empty(&scope)),
+                            None,
+                            Some(feedback_handle),
+                            None,
+                        )
                     };
                 let (upsert, health_update, upsert_token) =
                     crate::render::upsert::upsert::<_, _, mz_repr::Timestamp>(
@@ -386,10 +417,14 @@ where
                 // output, which is the easiest way to extract frontier information.
                 let upsert = match feedback_handle {
                     Some(feedback_handle) => {
+                        dbg!("HERE??");
                         probe.connect_loop(feedback_handle);
                         upsert.as_collection()
                     }
-                    None => upsert.as_collection(),
+                    None => {
+                        dbg!("HERE2??");
+                        upsert.as_collection()
+                    }
                 };
 
                 (

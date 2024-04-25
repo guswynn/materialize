@@ -15,6 +15,7 @@
 
 //! `streaming_chunks`, an operator for granular-izing input data.
 
+use std::cell::RefCell;
 use std::convert::Infallible;
 use std::ops::AddAssign;
 
@@ -41,9 +42,53 @@ pub struct FlowControl<G: Scope> {
 pub trait Quotable<Q: Copy + PartialOrd + Ord + AddAssign<Q>> {
     fn quota(&self) -> Q;
 }
+
+impl<A, B, C> Quotable<usize> for (A, B, C) {
+    fn quota(&self) -> usize {
+        // 1 row
+        // definitely hacking
+        // im not gonna think about it for a second
+        // lalala
+        1
+    }
+}
 pub trait Quota<Q: Copy> {
     fn take_quota(&mut self, q: Q);
     fn retire_quota(&mut self, q: Q);
+}
+
+use std::rc::Rc;
+
+#[derive(Clone, Default)]
+pub struct InWorkerRowCounter {
+    count: Rc<RefCell<isize>>,
+    pub max: usize,
+    notify: Rc<tokio::sync::Notify>,
+}
+
+impl InWorkerRowCounter {
+    pub async fn take_row(&self) {
+        loop {
+            let mut current = self.count.borrow_mut();
+
+            if *current < (self.max as isize) {
+                *current += 1;
+                return;
+            }
+
+            self.notify.notified().await;
+        }
+    }
+}
+
+impl Quota<usize> for InWorkerRowCounter {
+    fn take_quota(&mut self, q: usize) {}
+    fn retire_quota(&mut self, q: usize) {
+        *self.count.borrow_mut() -= (q as isize);
+
+        dbg!(*self.count.borrow());
+        self.notify.notify_waiters();
+    }
 }
 
 pub fn quota_feedback<'c, G, D, Q, Qut>(
@@ -102,7 +147,7 @@ where
             }
 
             let feedback_upper = frontiers[1].frontier();
-            tracing::trace!(
+            tracing::info!(
                 "{}, feedback:{:?}, quotas:{:?}",
                 worker_index,
                 feedback_upper.to_owned(),
@@ -117,7 +162,7 @@ where
                     true
                 }
             });
-            tracing::trace!(
+            tracing::info!(
                 "{}, AFTER feedback:{:?}, quotas:{:?}",
                 worker_index,
                 feedback_upper.to_owned(),
