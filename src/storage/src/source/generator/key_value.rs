@@ -133,7 +133,9 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 for sp in local_partitions.iter_mut() {
                     updates_buffer.clear();
                     emitted += sp.produce_batch(&mut updates_buffer, &mut value_buffer);
-                    data_output.give_container(&cap, &mut updates_buffer).await;
+                    for u in updates_buffer.drain(..) {
+                        data_output.give(&cap, u).await;
+                    }
 
                     stats_output
                         .give(
@@ -181,7 +183,9 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 for up in local_partitions.iter_mut() {
                     updates_buffer.clear();
                     upper_offset = up.produce_batch(&mut updates_buffer, &mut value_buffer);
-                    data_output.give_container(&cap, &mut updates_buffer).await;
+                    for u in updates_buffer.drain(..) {
+                        data_output.give(&cap, u).await;
+                    }
                 }
                 cap.downgrade(&MzOffset::from(upper_offset));
                 progress_cap.downgrade(&MzOffset::from(upper_offset));
