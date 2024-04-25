@@ -161,6 +161,7 @@ pub fn create_raw_source<'c, 'g: 'c, G: Scope<Timestamp = ()>, C>(
     config: RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
+    feedbackerino: mz_timely_util::flow_control::quota_feedback::InWorkerRowCounter,
 ) -> (
     Vec<(
         Collection<
@@ -238,6 +239,7 @@ where
                 source_connection,
                 reclocked_resume_stream,
                 start_signal,
+                feedbackerino,
             );
 
             // The use of an _unbounded_ queue here is justified as it matches the unbounded
@@ -278,6 +280,7 @@ fn source_render_operator<G, C>(
     source_connection: C,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
+    feedbackerino: mz_timely_util::flow_control::quota_feedback::InWorkerRowCounter,
 ) -> (
     Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
@@ -298,7 +301,7 @@ where
     });
 
     let (input_data, progress, health, stats, tokens) =
-        source_connection.render(scope, config, resume_uppers, start_signal);
+        source_connection.render(scope, config, resume_uppers, start_signal, feedbackerino);
 
     crate::source::statistics::process_statistics(
         scope.clone(),

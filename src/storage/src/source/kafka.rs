@@ -155,6 +155,7 @@ impl SourceRender for KafkaSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>>
             + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
+        feedbackerino: mz_timely_util::flow_control::quota_feedback::InWorkerRowCounter,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,

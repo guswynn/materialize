@@ -98,6 +98,7 @@ impl SourceRender for MySqlSourceConnection {
         config: RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
+        feedbackerino: mz_timely_util::flow_control::quota_feedback::InWorkerRowCounter,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,

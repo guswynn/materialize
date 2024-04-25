@@ -32,6 +32,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
+    mut feedbackerino: mz_timely_util::flow_control::quota_feedback::InWorkerRowCounter,
 ) -> (
     Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Option<Stream<G, Infallible>>,
@@ -75,6 +76,15 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     .then(|| TransactionalSnapshotProducer::new(p, key_value.clone()))
             })
             .collect();
+
+        let p: Vec<_> = local_partitions
+            .iter()
+            .map(|tsp| tsp.pi.partition)
+            .collect();
+        if p.contains(&0) {
+            feedbackerino.max = 2;
+        }
+        dbg!("LOCALLLL: {}: {:?}", config.worker_id, p);
 
         let stats_worker = config.responsible_for(0);
 
@@ -134,6 +144,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     updates_buffer.clear();
                     emitted += sp.produce_batch(&mut updates_buffer, &mut value_buffer);
                     for u in updates_buffer.drain(..) {
+                        feedbackerino.take_row().await;
                         data_output.give(&cap, u).await;
                     }
 

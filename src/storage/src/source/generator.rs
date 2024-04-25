@@ -98,6 +98,7 @@ impl GeneratorKind {
         config: RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
+        feedbackerino: mz_timely_util::flow_control::quota_feedback::InWorkerRowCounter,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
@@ -110,9 +111,14 @@ impl GeneratorKind {
                 tick_micros,
                 generator,
             } => render_simple_generator(generator, tick_micros, scope, config, committed_uppers),
-            GeneratorKind::KeyValue(kv) => {
-                key_value::render(kv, scope, config, committed_uppers, start_signal)
-            }
+            GeneratorKind::KeyValue(kv) => key_value::render(
+                kv,
+                scope,
+                config,
+                committed_uppers,
+                start_signal,
+                feedbackerino,
+            ),
         }
     }
 }
@@ -128,6 +134,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         config: RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
+        feedbackerino: mz_timely_util::flow_control::quota_feedback::InWorkerRowCounter,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
@@ -136,7 +143,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(&self.load_generator, self.tick_micros);
-        generator_kind.render(scope, config, committed_uppers, start_signal)
+        generator_kind.render(scope, config, committed_uppers, start_signal, feedbackerino)
     }
 }
 

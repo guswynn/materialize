@@ -150,6 +150,7 @@ where
                 base_source_config.clone(),
                 connection,
                 start_signal,
+                row_counter.clone(),
             );
 
             needed_tokens.extend(source_tokens);

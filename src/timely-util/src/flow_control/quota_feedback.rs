@@ -69,11 +69,13 @@ pub struct InWorkerRowCounter {
 impl InWorkerRowCounter {
     pub async fn take_row(&self) {
         loop {
-            let mut current = self.count.borrow_mut();
+            {
+                let mut current = self.count.borrow_mut();
 
-            if *current < (self.max as isize) {
-                *current += 1;
-                return;
+                if *current < (self.max as isize) {
+                    *current += 1;
+                    return;
+                }
             }
 
             self.notify.notified().await;
